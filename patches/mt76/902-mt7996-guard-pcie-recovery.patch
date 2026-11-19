@@ -1,8 +1,3 @@
-From: TR3600 stability fix
-Subject: wifi: mt76: mt7996: guard L1 SER recovery against offline PCIe link
-
-Avoid synchronous external abort kernel panic if MT7996 PCIe link drops before L1 recovery.
----
 diff --git a/mt7996/mac.c b/mt7996/mac.c
 --- a/mt7996/mac.c
 +++ b/mt7996/mac.c
@@ -14,13 +9,20 @@ diff --git a/mt7996/mac.c b/mt7996/mac.c
  #include <linux/etherdevice.h>
  #include <linux/timekeeping.h>
  #include "coredump.h"
-@@ -2510,6 +2511,22 @@ void mt7996_mac_reset_work(struct work_struct *work)
+@@ -2510,6 +2511,27 @@ void mt7996_mac_reset_work(struct work_struct *work)
  	if (!(READ_ONCE(dev->recovery.state) & MT_MCU_CMD_STOP_DMA))
  		return;
  
 +	/*
-+	 * Detect an offline PCIe link before poking MMIO registers during L1 SER
-+	 * recovery so we fall back to a clean software reset instead of panicking.
++	 * L1 SER recovery: the code below re-arms the chip by writing a long
++	 * series of MMIO registers. If the PCIe link has already gone away
++	 * (the FW message timeout that queued us is often the *symptom* of a
++	 * dead link, not the cause), the first MMIO access raises a
++	 * synchronous external abort and the kernel panics - pci=noaer does
++	 * not help because a synchronous abort never reaches the AER path.
++	 *
++	 * Detect a dead link and, instead of poking a dead bus, do a
++	 * software-only reset and let mac80211 re-drive the device.
 +	 */
 +	if (dev_is_pci(dev->mt76.dev) && dev->pdev &&
 +	    pci_channel_offline(dev->pdev)) {
