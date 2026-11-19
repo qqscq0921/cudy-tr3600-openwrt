@@ -1,0 +1,34 @@
+From: OpenWrt mt76 backport (da2c90d2)
+Subject: wifi: mt76: mt7996: send the STA_REC before the per-station VoW setup
+
+Prevents wifi down/up from breaking client association until reboot on MT7990/MT7996.
+---
+--- a/mt7996/mcu.c
++++ b/mt7996/mcu.c
+@@ -2718,14 +2718,21 @@
+ 		}
+ 	}
+ 
+-	ret = mt7996_mcu_add_group(dev, link, wcid);
+-	if (ret) {
+-		dev_kfree_skb(skb);
+-		return ret;
+-	}
+ out:
+-	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
+-				     MCU_WMWA_UNI_CMD(STA_REC_UPDATE), true);
++	ret = mt76_mcu_skb_send_msg(&dev->mt76, skb,
++				    MCU_WMWA_UNI_CMD(STA_REC_UPDATE), true);
++	if (ret || conn_state == CONN_STATE_DISCONNECT)
++		return ret;
++
++	/*
++	 * Send STA_REC update first so firmware registers the wcid before VoW
++	 * programming; ignore VoW errors rather than discarding STA_REC.
++	 */
++	mt7996_mcu_add_group(dev, link, wcid);
++
++	return 0;
+ }
+ 
+ int mt7996_mcu_teardown_mld_sta(struct mt7996_dev *dev,

@@ -1,0 +1,20 @@
+#!/bin/sh
+# First-boot defaults for Cudy TR3600 v1 OpenWrt 25.12
+
+# Chinese UI + standard bootstrap theme
+uci -q set luci.main.lang='zh_cn'
+uci -q set luci.main.theme='bootstrap'
+uci -q commit luci
+
+# Timezone Asia/Shanghai
+uci -q set system.@system[0].zonename='Asia/Shanghai'
+uci -q set system.@system[0].timezone='CST-8'
+uci -q commit system
+
+# Keep software/hardware flow offloading disabled so nftables & Nikki/TProxy
+# inspect 100% of forwarded packets without kernel bypass.
+uci -q set firewall.@defaults[0].flow_offloading='0'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+uci -q commit firewall
+
+exit 0

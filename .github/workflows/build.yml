@@ -1,0 +1,96 @@
+name: Build OpenWrt 25.12 for Cudy TR3600 v1
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free disk space on runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Install OpenWrt build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3-distutils-extra \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget zstd curl
+
+      - name: Clone official OpenWrt 25.12
+        run: |
+          git clone --depth 1 -b openwrt-25.12 https://github.com/openwrt/openwrt.git openwrt
+          cd openwrt
+          echo "OPENWRT_REV=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Add Nikki feed (mihomo-meta + LuCI GUI)
+        run: |
+          echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> openwrt/feeds.conf.default
+
+      - name: Apply auditable Cudy TR3600 v1 patches & overlay
+        run: |
+          bash scripts/apply_patches.sh openwrt
+
+      - name: Update and install feeds
+        working-directory: openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate and verify .config
+        working-directory: openwrt
+        run: |
+          cp ../config/tr3600.config .config
+          make defconfig
+          grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y$' .config
+          grep -q '^CONFIG_PACKAGE_nikki=y$' .config
+          grep -q '^CONFIG_PACKAGE_luci-app-nikki=y$' .config
+          grep -q '^CONFIG_PACKAGE_mihomo-meta=y$' .config
+          echo "Verified target + Nikki + mihomo-meta in .config"
+
+      - name: Download sources
+        working-directory: openwrt
+        run: |
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+
+      - name: Compile firmware
+        working-directory: openwrt
+        run: |
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Organize firmware artifacts
+        run: |
+          mkdir -p release-files
+          OUT=openwrt/bin/targets/mediatek/filogic
+          cp "$OUT"/*cudy_tr3600-v1* release-files/
+          cp "$OUT"/*.manifest release-files/ || true
+          cp "$OUT"/sha256sums release-files/ || true
+          (cd release-files && sha256sum *.bin > SHA256SUMS.txt)
+          ls -lh release-files/
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cudy-tr3600-v1-openwrt-25.12-${{ env.OPENWRT_REV }}
+          path: release-files/
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="tr3600-25.12-$(date -u +%Y%m%d-%H%M)"
+          gh release create "$TAG" release-files/* \
+            --title "Cudy TR3600 v1 — OpenWrt 25.12 (${{ env.OPENWRT_REV }})" \
+            --notes "Built from official OpenWrt \`openwrt-25.12\` (\`${{ env.OPENWRT_REV }}\`) + auditable TR3600 v1 DTS/mt76/EEE patches + Nikki (mihomo-meta + Chinese LuCI). Default LAN IP: \`192.168.2.1\`."
