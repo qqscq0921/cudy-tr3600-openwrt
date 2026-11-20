@@ -7,6 +7,8 @@ const STUDIO_PATH = '/etc/nikki/studio.json';
 const SUBS_DIR = '/etc/nikki/studio-subs';
 const PROFILE_PATH = '/etc/nikki/profiles/tr3600-main.yaml';
 const PROFILE_TMP = '/tmp/tr3600-main.validate.yaml';
+const RULE_PROV_DIR = '/etc/nikki/run/providers/rule';
+const CLAUDE_SYNC_STATUS = '/etc/nikki/claude-sync-status.json';
 const MIHOMO_API = 'http://127.0.0.1:9090';
 
 function sh_quote(s) {
@@ -86,9 +88,11 @@ function read_body_json() {
 function load_studio() {
 	let raw = fs.readfile(STUDIO_PATH);
 	if (!raw) {
-		return { subscriptions: [], custom_nodes: [], custom_rules: [] };
+		return { subscriptions: [], custom_nodes: [], custom_rules: [], rule_sets: [] };
 	}
-	return json(raw);
+	let j = json(raw);
+	if (!j.rule_sets) j.rule_sets = [];
+	return j;
 }
 
 function save_studio(data) {
@@ -215,6 +219,45 @@ function parse_ss_uri(uri, custom_name) {
 	return node;
 }
 
+function prefetch_provider(id, url, fmt) {
+	fs.mkdir('/etc/nikki/run/providers', 0755);
+	fs.mkdir(RULE_PROV_DIR, 0755);
+	let ext = fmt == 'mrs' ? 'mrs' : (fmt == 'text' ? 'list' : 'yaml');
+	let fpath = RULE_PROV_DIR + '/' + id + '.' + ext;
+	if (fs.stat(fpath) && fs.stat(fpath).size > 16) return { ok: true, path: fpath };
+	let tmp = fpath + '.tmp';
+	let r = run_cmd('curl -4 -sSL -m 20 -x http://127.0.0.1:7890 ' + sh_quote(url) + ' -o ' + sh_quote(tmp));
+	if (r.code != 0 || !fs.stat(tmp) || fs.stat(tmp).size < 16) {
+		r = run_cmd('curl -4 -sSL -m 20 ' + sh_quote(url) + ' -o ' + sh_quote(tmp));
+	}
+	if (r.code != 0 || !fs.stat(tmp) || fs.stat(tmp).size < 16) {
+		fs.unlink(tmp);
+		return { ok: false, error: '拉取规则集失败：' + url };
+	}
+	fs.rename(tmp, fpath);
+	fs.chmod(fpath, 0644);
+	return { ok: true, path: fpath };
+}
+
+function get_builtin_rules_meta() {
+	return [
+		{ type: 'RULE-SET', value: 'claude_netcoffee', target: '🤖 Claude-AI', note: 'ip.net.coffee Claude 全量域名/IP (每日自动同步)' },
+		{ type: 'RULE-SET', value: 'claude_bm7', target: '🤖 Claude-AI', note: 'blackmatrix7 Claude 规则集 (每24h更新)' },
+		{ type: 'GEOSITE', value: 'anthropic', target: '🤖 Claude-AI', note: 'Anthropic 内置集合' },
+		{ type: 'IP-CIDR', value: '160.79.104.0/21', target: '🤖 Claude-AI', note: 'Anthropic 官方 IPv4 段' },
+		{ type: 'GEOSITE', value: 'openai', target: '🤖 Claude-AI', note: 'OpenAI / ChatGPT' },
+		{ type: 'DOMAIN-SUFFIX', value: 'antigravity.google / cloudcode-pa.googleapis.com / daily-cloudcode-pa.googleapis.com', target: '🤖 Claude-AI', note: 'Antigravity / CloudCode' },
+		{ type: 'GEOSITE', value: 'google-gemini', target: '🤖 Claude-AI', note: 'Gemini / AI Studio / DeepMind' },
+		{ type: 'GEOSITE', value: 'xai', target: '🤖 Claude-AI', note: 'xAI / Grok' },
+		{ type: 'GEOSITE', value: 'category-ai-!cn', target: '🤖 Claude-AI', note: '海外主流 AI 工具兜底 (Cursor / Perplexity / Poe 等)' },
+		{ type: 'GEOSITE', value: 'youtube', target: '📹 油管视频', note: 'YouTube' },
+		{ type: 'GEOSITE', value: 'google', target: '🌏 Google', note: 'Google 服务 (+ GEOIP google)' },
+		{ type: 'GEOSITE', value: 'netflix', target: '🎥 奈飞视频', note: 'Netflix (+ GEOIP netflix)' },
+		{ type: 'GEOSITE', value: 'cn', target: 'DIRECT', note: '国内域名直连 (+ GEOIP CN + 私有局域网)' },
+		{ type: 'MATCH', value: '其余所有流量', target: '🚀 日常代理', note: '最终兜底规则 (等价 Karing final)' },
+	];
+}
+
 function build_and_apply(studio) {
 	let secret = get_secret();
 	let all_proxies = [];
@@ -222,9 +265,10 @@ function build_and_apply(studio) {
 	let claude_names = [];
 	let sg_names = [], jp_all = [], jp_hi = [], hk_names = [], us_names = [], tw_names = [], sub_all = [];
 
-	// 1. Custom nodes first
+	// 1. Custom nodes first (migrate legacy 🇸🇬 新加坡中转 -> 🛡️ 前置中转)
 	for (let cn in (studio.custom_nodes ?? [])) {
 		if (cn.enabled === false) continue;
+		if (cn.dialer_proxy == '🇸🇬 新加坡中转') cn.dialer_proxy = '🛡️ 前置中转';
 		let p = {};
 		for (let k, v in cn.config) p[k] = v;
 		if (cn.dialer_proxy && length(cn.dialer_proxy) > 0) {
@@ -278,10 +322,14 @@ function build_and_apply(studio) {
 		return {
 			name: name, type: 'url-test',
 			url: 'https://www.gstatic.com/generate_204',
-			interval: 300, tolerance: 50, lazy: false,
+			interval: 300, tolerance: 50, lazy: false, hidden: true,
 			proxies: members
 		};
 	}
+
+	// Relay selector (never hidden! Lets user switch chain relay between SG/HK/JP/TW/US or any node)
+	let relay_list = ['🇸🇬 新加坡自动', '🇭🇰 香港自动', '🇯🇵 日本高级', '🇯🇵 日本自动', '🇨🇳 台湾自动', '🇺🇸 美国自动'];
+	for (let n in sub_all) push(relay_list, n);
 
 	let daily_list = ['🇸🇬 新加坡自动', '🇯🇵 日本高级', '🇯🇵 日本自动', '🇭🇰 香港自动', '🇺🇸 美国自动', '🇨🇳 台湾自动'];
 	for (let n in claude_names) { if (n != 'REJECT') push(daily_list, n); }
@@ -289,7 +337,7 @@ function build_and_apply(studio) {
 
 	let groups = [
 		{ name: '🤖 Claude-AI', type: 'select', proxies: claude_names },
-		ut('🇸🇬 新加坡中转', sg_names),
+		{ name: '🛡️ 前置中转', type: 'select', proxies: relay_list },
 		{ name: '🚀 日常代理', type: 'select', proxies: daily_list },
 		{ name: '📹 油管视频', type: 'select', proxies: ['🇸🇬 新加坡自动', '🇭🇰 香港自动', '🇯🇵 日本高级', '🇺🇸 美国自动', '🇨🇳 台湾自动', '🚀 日常代理'] },
 		{ name: '🌏 Google', type: 'select', proxies: ['🇸🇬 新加坡自动', '🇺🇸 美国自动', '🇯🇵 日本高级', '🇭🇰 香港自动', '🚀 日常代理'] },
@@ -305,11 +353,39 @@ function build_and_apply(studio) {
 		ut('🇨🇳 台湾自动', tw_names),
 	];
 
+	// Build rule-providers (built-in auto-updating Claude providers + user managed rule sets)
+	fs.mkdir('/etc/nikki/run/providers', 0755);
+	fs.mkdir(RULE_PROV_DIR, 0755);
+
+	let providers = {};
+	if (fs.stat(RULE_PROV_DIR + '/claude_netcoffee.yaml')) {
+		providers.claude_netcoffee = {
+			type: 'file',
+			behavior: 'classical',
+			format: 'yaml',
+			path: './providers/rule/claude_netcoffee.yaml',
+		};
+	}
+	let bm7_url = 'https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Claude/Claude.yaml';
+	let bm7_r = prefetch_provider('claude_bm7', bm7_url, 'yaml');
+	if (bm7_r.ok) {
+		providers.claude_bm7 = {
+			type: 'http',
+			behavior: 'classical',
+			format: 'yaml',
+			url: bm7_url,
+			path: './providers/rule/claude_bm7.yaml',
+			interval: 86400,
+			proxy: '🚀 日常代理',
+		};
+	}
+
 	let rules = [
 		'GEOSITE,private,DIRECT',
 		'GEOIP,private,DIRECT,no-resolve',
 	];
-	// Custom rules placed at top priority (after private)
+
+	// User custom rules (highest priority)
 	for (let r in (studio.custom_rules ?? [])) {
 		if (r.enabled === false) continue;
 		if (!r.type || !r.value || !r.target) continue;
@@ -317,14 +393,42 @@ function build_and_apply(studio) {
 		if (r.type == 'IP-CIDR' || r.type == 'IP-CIDR6') line += ',no-resolve';
 		push(rules, line);
 	}
+
+	// User managed remote Rule Sets (ACL4SSR / blackmatrix7 / MetaCubeX / custom URL)
+	for (let rs in (studio.rule_sets ?? [])) {
+		if (rs.enabled === false) continue;
+		if (!rs.id || !rs.url || !rs.target) continue;
+		let fmt = rs.format || 'yaml';
+		let beh = rs.behavior || 'classical';
+		let ext = fmt == 'mrs' ? 'mrs' : (fmt == 'text' ? 'list' : 'yaml');
+		let pf = prefetch_provider(rs.id, rs.url, fmt);
+		if (!pf.ok) return { ok: false, error: pf.error };
+		providers[rs.id] = {
+			type: 'http',
+			behavior: beh,
+			format: fmt,
+			url: rs.url,
+			path: './providers/rule/' + rs.id + '.' + ext,
+			interval: 86400,
+			proxy: '🚀 日常代理',
+		};
+		push(rules, 'RULE-SET,' + rs.id + ',' + rs.target);
+	}
+
+	// Built-in Claude auto-updating providers (high priority)
+	if (providers.claude_netcoffee) push(rules, 'RULE-SET,claude_netcoffee,🤖 Claude-AI');
+	if (providers.claude_bm7) push(rules, 'RULE-SET,claude_bm7,🤖 Claude-AI');
+
 	// Core built-in AI / Claude / Codex / Antigravity + Media + CN rules
 	let builtin = [
 		'DOMAIN-SUFFIX,anthropic.com,🤖 Claude-AI',
 		'DOMAIN-SUFFIX,claude.ai,🤖 Claude-AI',
 		'DOMAIN-SUFFIX,claude.com,🤖 Claude-AI',
-		'DOMAIN-SUFFIX,claudeusercontent.com,🤖 Claude-AI',
 		'DOMAIN-SUFFIX,clau.de,🤖 Claude-AI',
-		'IP-CIDR,160.79.104.0/23,🤖 Claude-AI,no-resolve',
+		'DOMAIN-SUFFIX,claudemcpclient.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,claudemcpcontent.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,claudeusercontent.com,🤖 Claude-AI',
+		'IP-CIDR,160.79.104.0/21,🤖 Claude-AI,no-resolve',
 		'GEOSITE,anthropic,🤖 Claude-AI',
 		'DOMAIN-SUFFIX,openai.com,🤖 Claude-AI',
 		'DOMAIN-SUFFIX,chatgpt.com,🤖 Claude-AI',
@@ -372,6 +476,8 @@ function build_and_apply(studio) {
 		'unified-delay: true',
 		'tcp-concurrent: false',
 		'find-process-mode: off',
+		'geo-auto-update: true',
+		'geo-update-interval: 24',
 		'external-controller: 0.0.0.0:9090',
 		'external-ui: ui',
 		'secret: ' + sprintf('%J', secret),
@@ -434,6 +540,10 @@ function build_and_apply(studio) {
 	for (let p in all_proxies) push(out, '  - ' + sprintf('%J', p));
 	push(out, '', 'proxy-groups:');
 	for (let g in groups) push(out, '  - ' + sprintf('%J', g));
+	if (length(keys(providers)) > 0) {
+		push(out, '', 'rule-providers:');
+		for (let k, v in providers) push(out, '  ' + k + ': ' + sprintf('%J', v));
+	}
 	push(out, '', 'rules:');
 	for (let r in rules) push(out, '  - ' + sprintf('%J', r));
 
@@ -454,9 +564,17 @@ function build_and_apply(studio) {
 	fs.chmod(PROFILE_PATH, 0600);
 	save_studio(studio);
 
-	// Reload Nikki cleanly
+	// Zero-downtime hot-reload via Mihomo API if running, else fallback to nikki restart
+	let pid = trim(run_cmd('pidof mihomo').out);
+	if (length(pid) > 0) {
+		run_cmd('cp ' + sh_quote(PROFILE_PATH) + ' /etc/nikki/run/config.yaml && chmod 600 /etc/nikki/run/config.yaml');
+		let hr = mihomo_req('PUT', '/configs?force=true', { path: '/etc/nikki/run/config.yaml' });
+		if (hr.code == 0 && length(trim(hr.out)) == 0) {
+			return { ok: true, proxy_count: length(all_proxies), reload_mode: 'hot' };
+		}
+	}
 	let rel = run_cmd('/etc/init.d/nikki restart');
-	return { ok: rel.code == 0, proxy_count: length(all_proxies), reload_out: trim(rel.out) };
+	return { ok: rel.code == 0, proxy_count: length(all_proxies), reload_mode: 'restart', reload_out: trim(rel.out) };
 }
 
 function fetch_subscription(sub) {
@@ -539,6 +657,7 @@ if (action == 'state') {
 	let killswitch = index(ks.out, 'accept_to_wan') < 0 && length(ks.out) > 0;
 
 	let live_proxies = {};
+	let live_providers = {};
 	if (length(pid) > 0) {
 		let pr = mihomo_req('GET', '/proxies', null);
 		if (pr.code == 0) {
@@ -547,7 +666,17 @@ if (action == 'state') {
 				live_proxies = pj.proxies ?? {};
 			} catch (e) {}
 		}
+		let rp = mihomo_req('GET', '/providers/rules', null);
+		if (rp.code == 0) {
+			try {
+				let rj = json(rp.out);
+				live_providers = rj.providers ?? {};
+			} catch (e) {}
+		}
 	}
+	let claude_sync = null;
+	let cs_raw = fs.readfile(CLAUDE_SYNC_STATUS);
+	if (cs_raw) { try { claude_sync = json(cs_raw); } catch (e) {} }
 	send_json({
 		ok: true,
 		system: {
@@ -560,6 +689,9 @@ if (action == 'state') {
 		},
 		studio: studio,
 		live_proxies: live_proxies,
+		live_providers: live_providers,
+		claude_sync: claude_sync,
+		builtin_rules: get_builtin_rules_meta(),
 	});
 }
 
@@ -715,6 +847,67 @@ if (action == 'rule_save') {
 		if (body.note != null) item.note = trim(body.note);
 	}
 	send_json(build_and_apply(studio));
+}
+
+if (action == 'ruleset_save') {
+	let body = read_body_json();
+	let studio = load_studio();
+	if (!studio.rule_sets) studio.rule_sets = [];
+	if (body.delete_id) {
+		studio.rule_sets = filter(studio.rule_sets, (x) => x.id != body.delete_id);
+		send_json(build_and_apply(studio));
+	}
+	let item = null;
+	for (let rs in studio.rule_sets) {
+		if (rs.id == body.id) { item = rs; break; }
+	}
+	if (!item) {
+		let url = trim(body.url || '');
+		if (length(url) == 0) send_json({ ok: false, error: '规则集 URL 不能为空' }, 400);
+		let raw_id = trim(body.id || ('rs_' + time()));
+		let safe_id = replace(raw_id, /[^A-Za-z0-9_-]/g, '_');
+		if (safe_id == 'claude_netcoffee' || safe_id == 'claude_bm7') safe_id += '_' + time();
+		let fmt = body.format || (match(url, /\.mrs(\?|$)/i) ? 'mrs' : (match(url, /\.list(\?|$)/i) ? 'text' : 'yaml'));
+		let beh = body.behavior || (fmt == 'mrs' ? 'domain' : 'classical');
+		item = {
+			id: safe_id,
+			name: trim(body.name || safe_id),
+			source: trim(body.source || 'Custom'),
+			url: url,
+			format: fmt,
+			behavior: beh,
+			target: body.target || '🚀 日常代理',
+			enabled: true,
+		};
+		unshift(studio.rule_sets, item);
+	} else {
+		if (body.enabled != null) item.enabled = !!body.enabled;
+		if (body.target != null) item.target = body.target;
+		if (body.name != null) item.name = trim(body.name);
+	}
+	send_json(build_and_apply(studio));
+}
+
+if (action == 'sync_rulesets') {
+	let cs_out = run_cmd('/usr/bin/sync-claude-rules');
+	let cs = null;
+	try { cs = json(cs_out.out); } catch (e) { cs = { ok: cs_out.code == 0, raw: trim(cs_out.out) }; }
+	let updated = [];
+	let rp = mihomo_req('GET', '/providers/rules', null);
+	if (rp.code == 0) {
+		try {
+			let provs = json(rp.out).providers ?? {};
+			for (let k, v in provs) {
+				let ur = mihomo_req('PUT', '/providers/rules/' + url_encode(k), null);
+				push(updated, { name: k, ok: ur.code == 0 });
+			}
+		} catch (e) {}
+	}
+	send_json({ ok: true, claude_sync: cs, providers_updated: updated });
+}
+
+if (action == 'rebuild') {
+	send_json(build_and_apply(load_studio()));
 }
 
 if (action == 'nikki_ctrl') {

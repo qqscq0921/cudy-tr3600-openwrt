@@ -1,0 +1,144 @@
+#!/usr/bin/ucode
+'use strict';
+
+import * as fs from 'fs';
+
+const URL = 'https://ip.net.coffee/claude/site.html';
+const OUT_DIR = '/etc/nikki/run/providers/rule';
+const OUT_FILE = OUT_DIR + '/claude_netcoffee.yaml';
+const STATUS_FILE = '/etc/nikki/claude-sync-status.json';
+const MIHOMO_API = 'http://127.0.0.1:9090';
+
+function run_cmd(cmd) {
+	let p = fs.popen(cmd + ' 2>&1', 'r');
+	if (!p) return { code: -1, out: 'popen failed' };
+	let out = p.read('all') ?? '';
+	let code = p.close();
+	return { code: code ?? 0, out: out };
+}
+
+function sh_quote(s) {
+	return "'" + replace(s ?? '', "'", "'\\''") + "'";
+}
+
+function now_str() {
+	return trim(run_cmd('date "+%Y-%m-%d %H:%M:%S"').out);
+}
+
+function get_secret() {
+	return trim(run_cmd('uci -q get nikki.mixin.api_secret').out);
+}
+
+function write_status(obj) {
+	fs.writefile(STATUS_FILE + '.tmp', sprintf('%J\n', obj));
+	fs.rename(STATUS_FILE + '.tmp', STATUS_FILE);
+}
+
+fs.mkdir('/etc/nikki/run/providers', 0755);
+fs.mkdir(OUT_DIR, 0755);
+
+let tmp_html = '/tmp/claude_netcoffee.html';
+// Try via local Mihomo proxy first, fallback to direct
+let r = run_cmd('curl -4 -sSL -m 15 -x http://127.0.0.1:7890 ' + sh_quote(URL) + ' -o ' + sh_quote(tmp_html));
+if (r.code != 0 || !fs.stat(tmp_html) || fs.stat(tmp_html).size < 1000) {
+	r = run_cmd('curl -4 -sSL -m 15 ' + sh_quote(URL) + ' -o ' + sh_quote(tmp_html));
+}
+
+if (r.code != 0 || !fs.stat(tmp_html) || fs.stat(tmp_html).size < 1000) {
+	fs.unlink(tmp_html);
+	let prev = {};
+	try { prev = json(fs.readfile(STATUS_FILE)); } catch (e) {}
+	prev.last_check = now_str();
+	prev.ok = false;
+	prev.error = '拉取 ip.net.coffee 失败';
+	write_status(prev);
+	printf('%J\n', prev);
+	exit(1);
+}
+
+let html = fs.readfile(tmp_html) ?? '';
+fs.unlink(tmp_html);
+
+// Extract the Clash payload YAML inside <pre>...</pre>
+let rules = [];
+let seen = {};
+let parts = split(html, /<pre[^>]*>/);
+for (let i = 1; i < length(parts); i++) {
+	let e = index(parts[i], '</pre>');
+	if (e < 0) continue;
+	let block = substr(parts[i], 0, e);
+	if (index(block, 'payload:') < 0 || index(block, 'DOMAIN-SUFFIX,anthropic.com') < 0) continue;
+	block = replace(block, /<[^>]+>/g, '');
+	block = replace(block, /&amp;/g, '&');
+	block = replace(block, /&lt;/g, '<');
+	block = replace(block, /&gt;/g, '>');
+	for (let raw_ln in split(block, /\r?\n/)) {
+		let ln = trim(raw_ln);
+		let m = match(ln, /^-[ \t]+((DOMAIN|DOMAIN-SUFFIX|DOMAIN-KEYWORD|IP-CIDR),.+)$/);
+		if (!m) continue;
+		let rule = trim(m[1]);
+		// Skip IP-ASN / IP-CIDR6 (ASN.mmdb not installed, IPv6 disabled)
+		if (seen[rule]) continue;
+		seen[rule] = true;
+		push(rules, rule);
+	}
+	if (length(rules) > 0) break;
+}
+
+// Sanity check: must have >= 10 rules and include anthropic.com
+if (length(rules) < 10 || !seen['DOMAIN-SUFFIX,anthropic.com']) {
+	let prev = {};
+	try { prev = json(fs.readfile(STATUS_FILE)); } catch (e) {}
+	prev.last_check = now_str();
+	prev.ok = false;
+	prev.error = '页面格式异常，解析结果不足（已保留旧规则，未覆盖）';
+	write_status(prev);
+	printf('%J\n', prev);
+	exit(1);
+}
+
+let lines = [
+	'# Auto-synced from ' + URL,
+	'# Updated: ' + now_str(),
+	'payload:',
+];
+for (let rl in rules) push(lines, '  - ' + rl);
+let new_content = join('\n', lines) + '\n';
+
+// Compare rule body (ignore timestamp comment lines)
+function strip_comments(txt) {
+	let arr = [];
+	for (let ln in split(txt ?? '', /\r?\n/)) {
+		if (substr(trim(ln), 0, 1) == '#' || length(trim(ln)) == 0) continue;
+		push(arr, ln);
+	}
+	return join('\n', arr);
+}
+
+let old_content = fs.readfile(OUT_FILE) ?? '';
+let changed = strip_comments(old_content) != strip_comments(new_content);
+
+if (changed || !fs.stat(OUT_FILE)) {
+	fs.writefile(OUT_FILE + '.tmp', new_content);
+	fs.rename(OUT_FILE + '.tmp', OUT_FILE);
+	fs.chmod(OUT_FILE, 0644);
+	// Hot-reload Mihomo rule provider if Mihomo is running
+	let secret = get_secret();
+	if (length(secret) > 0 && length(trim(run_cmd('pidof mihomo').out)) > 0) {
+		run_cmd('curl -sS -m 8 -X PUT -H ' + sh_quote('Authorization: Bearer ' + secret) +
+			' ' + sh_quote(MIHOMO_API + '/providers/rules/claude_netcoffee'));
+	}
+}
+
+let prev = {};
+try { prev = json(fs.readfile(STATUS_FILE)); } catch (e) {}
+let status = {
+	ok: true,
+	changed: changed,
+	count: length(rules),
+	source: URL,
+	last_check: now_str(),
+	last_changed: changed ? now_str() : (prev.last_changed || now_str()),
+};
+write_status(status);
+printf('%J\n', status);
