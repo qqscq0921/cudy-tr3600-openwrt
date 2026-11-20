@@ -1,0 +1,730 @@
+#!/usr/bin/ucode
+'use strict';
+
+import * as fs from 'fs';
+
+const STUDIO_PATH = '/etc/nikki/studio.json';
+const SUBS_DIR = '/etc/nikki/studio-subs';
+const PROFILE_PATH = '/etc/nikki/profiles/tr3600-main.yaml';
+const PROFILE_TMP = '/tmp/tr3600-main.validate.yaml';
+const MIHOMO_API = 'http://127.0.0.1:9090';
+
+function sh_quote(s) {
+	return "'" + replace(s ?? '', "'", "'\\''") + "'";
+}
+
+function run_cmd(cmd) {
+	let p = fs.popen(cmd + ' 2>&1', 'r');
+	if (!p) return { code: -1, out: 'popen failed' };
+	let out = p.read('all') ?? '';
+	let code = p.close();
+	return { code: code ?? 0, out: out };
+}
+
+function get_secret() {
+	let r = run_cmd('uci -q get nikki.mixin.api_secret');
+	let s = trim(r.out);
+	return length(s) > 0 ? s : null;
+}
+
+function url_decode(s) {
+	if (!s) return '';
+	let out = replace(s, '+', ' ');
+	return replace(out, /%([0-9A-Fa-f]{2})/g, function(m, hex) {
+		return chr(int(hex, 16));
+	});
+}
+
+function url_encode(s) {
+	let out = '';
+	for (let i = 0; i < length(s); i++) {
+		let b = ord(s, i);
+		if ((b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 45 || b == 46 || b == 95 || b == 126) {
+			out += chr(b);
+		} else {
+			out += sprintf('%%%02X', b);
+		}
+	}
+	return out;
+}
+
+function parse_query(qs) {
+	let res = {};
+	if (!qs) return res;
+	for (let part in split(qs, '&')) {
+		let idx = index(part, '=');
+		if (idx >= 0) {
+			res[url_decode(substr(part, 0, idx))] = url_decode(substr(part, idx + 1));
+		} else if (length(part) > 0) {
+			res[url_decode(part)] = '1';
+		}
+	}
+	return res;
+}
+
+function send_json(obj, status) {
+	if (status && status != 200) {
+		let msg = status == 401 ? 'Unauthorized' : (status == 400 ? 'Bad Request' : 'Error');
+		printf('Status: %d %s\r\n', status, msg);
+	}
+	print('Content-Type: application/json; charset=utf-8\r\n');
+	print('Cache-Control: no-store\r\n\r\n');
+	print(sprintf('%J', obj));
+	exit(0);
+}
+
+function read_body_json() {
+	let raw = fs.stdin.read('all');
+	if (!raw || length(trim(raw)) == 0) return {};
+	try {
+		return json(raw);
+	} catch (e) {
+		send_json({ ok: false, error: 'Invalid JSON body: ' + e }, 400);
+	}
+}
+
+function load_studio() {
+	let raw = fs.readfile(STUDIO_PATH);
+	if (!raw) {
+		return { subscriptions: [], custom_nodes: [], custom_rules: [] };
+	}
+	return json(raw);
+}
+
+function save_studio(data) {
+	fs.mkdir(SUBS_DIR, 0700);
+	let tmp = STUDIO_PATH + '.tmp';
+	fs.writefile(tmp, sprintf('%J\n', data));
+	fs.rename(tmp, STUDIO_PATH);
+}
+
+function mihomo_req(method, path, body_obj) {
+	let secret = get_secret();
+	let cmd = 'curl -sS -m 10 -X ' + sh_quote(method) +
+		' -H ' + sh_quote('Authorization: Bearer ' + secret);
+	if (body_obj != null) {
+		cmd += ' -H "Content-Type: application/json" -d ' + sh_quote(sprintf('%J', body_obj));
+	}
+	cmd += ' ' + sh_quote(MIHOMO_API + path);
+	return run_cmd(cmd);
+}
+
+function parse_vless_uri(uri, custom_name) {
+	// vless://uuid@host:port?params#name
+	let m = match(uri, /^vless:\/\/([^@]+)@(\[[^\]]+\]|[^:\/?#]+):(\d+)([^#]*)(?:#(.*))?$/);
+	if (!m) return null;
+	let uuid = m[1];
+	let host = replace(m[2], /^\[|\]$/g, '');
+	let port = int(m[3]);
+	let qraw = m[4] ?? '';
+	let qidx = index(qraw, '?');
+	let q = qidx >= 0 ? parse_query(substr(qraw, qidx + 1)) : {};
+	let name = (custom_name && length(trim(custom_name)) > 0) ? trim(custom_name) : (m[5] ? url_decode(m[5]) : ('VLESS-' + host));
+	let node = {
+		name: name,
+		type: 'vless',
+		server: host,
+		port: port,
+		uuid: uuid,
+		network: q.type || 'tcp',
+		udp: true,
+	};
+	if (q.flow) node.flow = q.flow;
+	let sec = q.security || '';
+	if (sec == 'tls' || sec == 'reality') {
+		node.tls = true;
+		if (q.sni) node.servername = q.sni;
+		if (q.fp) node['client-fingerprint'] = q.fp;
+	}
+	if (sec == 'reality') {
+		node['reality-opts'] = {
+			'public-key': q.pbk || '',
+			'short-id': q.sid || '',
+		};
+	}
+	if (node.network == 'ws') {
+		node['ws-opts'] = { path: q.path || '/' };
+		if (q.host) node['ws-opts'].headers = { Host: q.host };
+	} else if (node.network == 'grpc') {
+		node['grpc-opts'] = { 'grpc-service-name': q.serviceName || '' };
+	}
+	return node;
+}
+
+function parse_ss_uri(uri, custom_name) {
+	// ss://BASE64@host:port/?plugin=...#name or ss://BASE64#name
+	let m = match(uri, /^ss:\/\/([^#]+)(?:#(.*))?$/);
+	if (!m) return null;
+	let body = m[1];
+	let name = (custom_name && length(trim(custom_name)) > 0) ? trim(custom_name) : (m[2] ? url_decode(m[2]) : 'SS-Node');
+	let q = {};
+	let qidx = index(body, '?');
+	if (qidx >= 0) {
+		q = parse_query(substr(body, qidx + 1));
+		body = substr(body, 0, qidx);
+	}
+	body = replace(body, /\/$/, '');
+	let cipher = '', password = '', host = '', port = 0;
+	let at = index(body, '@');
+	if (at >= 0) {
+		let userinfo = substr(body, 0, at);
+		let hp = substr(body, at + 1);
+		if (index(userinfo, ':') < 0) {
+			userinfo = b64dec(userinfo) ?? userinfo;
+		} else {
+			userinfo = url_decode(userinfo);
+		}
+		let cidx = index(userinfo, ':');
+		if (cidx < 0) return null;
+		cipher = substr(userinfo, 0, cidx);
+		password = substr(userinfo, cidx + 1);
+		let hm = match(hp, /^(\[[^\]]+\]|[^:]+):(\d+)$/);
+		if (!hm) return null;
+		host = replace(hm[1], /^\[|\]$/g, '');
+		port = int(hm[2]);
+	} else {
+		let dec = b64dec(body);
+		if (!dec) return null;
+		let dm = match(dec, /^([^:]+):(.+)@([^:]+):(\d+)$/);
+		if (!dm) return null;
+		cipher = dm[1]; password = dm[2]; host = dm[3]; port = int(dm[4]);
+	}
+	let node = {
+		name: name,
+		type: 'ss',
+		server: host,
+		port: port,
+		cipher: cipher,
+		password: password,
+		udp: true,
+	};
+	if (q.plugin) {
+		let parts = split(q.plugin, ';');
+		let pname = parts[0];
+		if (pname == 'obfs-local' || pname == 'simple-obfs') {
+			node.plugin = 'obfs';
+			let opts = {};
+			for (let i = 1; i < length(parts); i++) {
+				let kv = split(parts[i], '=');
+				if (kv[0] == 'obfs') opts.mode = kv[1];
+				if (kv[0] == 'obfs-host') opts.host = kv[1];
+			}
+			node['plugin-opts'] = opts;
+		}
+	}
+	return node;
+}
+
+function build_and_apply(studio) {
+	let secret = get_secret();
+	let all_proxies = [];
+	let seen = {};
+	let claude_names = [];
+	let sg_names = [], jp_all = [], jp_hi = [], hk_names = [], us_names = [], tw_names = [], sub_all = [];
+
+	// 1. Custom nodes first
+	for (let cn in (studio.custom_nodes ?? [])) {
+		if (cn.enabled === false) continue;
+		let p = {};
+		for (let k, v in cn.config) p[k] = v;
+		if (cn.dialer_proxy && length(cn.dialer_proxy) > 0) {
+			p['dialer-proxy'] = cn.dialer_proxy;
+		} else {
+			delete p['dialer-proxy'];
+		}
+		if (!p.name || seen[p.name]) continue;
+		seen[p.name] = true;
+		push(all_proxies, p);
+		if (cn.claude_exit) push(claude_names, p.name);
+	}
+
+	// 2. Enabled subscriptions cached proxies
+	for (let sub in (studio.subscriptions ?? [])) {
+		if (sub.enabled === false) continue;
+		let cpath = SUBS_DIR + '/' + sub.id + '.json';
+		let raw = fs.readfile(cpath);
+		if (!raw) continue;
+		let arr = null;
+		try { arr = json(raw); } catch (e) { continue; }
+		if (type(arr) != 'array') continue;
+		for (let p in arr) {
+			if (type(p) != 'object' || !p.name) continue;
+			let nm = p.name;
+			if (match(nm, /^(Expire|Traffic|剩余流量|套餐到期|官网)/i)) continue;
+			if (seen[nm]) continue;
+			seen[nm] = true;
+			push(all_proxies, p);
+			push(sub_all, nm);
+			if (index(nm, '新加坡') >= 0 || match(nm, /\bSG\b|Singapore/i)) push(sg_names, nm);
+			if (index(nm, '日本') >= 0 || match(nm, /\bJP\b|Japan/i)) {
+				push(jp_all, nm);
+				if (index(nm, '高级') >= 0 || index(nm, 'IEPL') >= 0 || index(nm, 'IPLC') >= 0) push(jp_hi, nm);
+			}
+			if (index(nm, '香港') >= 0 || match(nm, /\bHK\b|Hong\s*Kong/i)) push(hk_names, nm);
+			if (index(nm, '美国') >= 0 || match(nm, /\bUS\b|United States|America/i)) push(us_names, nm);
+			if (index(nm, '台湾') >= 0 || index(nm, '台灣') >= 0 || match(nm, /\bTW\b|Taiwan/i)) push(tw_names, nm);
+		}
+	}
+
+	if (length(claude_names) == 0) push(claude_names, 'REJECT');
+	if (length(sg_names) == 0) sg_names = length(sub_all) > 0 ? slice(sub_all, 0, 12) : ['REJECT'];
+	if (length(jp_all) == 0) jp_all = sg_names;
+	if (length(jp_hi) == 0) jp_hi = jp_all;
+	if (length(hk_names) == 0) hk_names = sg_names;
+	if (length(us_names) == 0) us_names = sg_names;
+	if (length(tw_names) == 0) tw_names = sg_names;
+
+	function ut(name, members) {
+		return {
+			name: name, type: 'url-test',
+			url: 'https://www.gstatic.com/generate_204',
+			interval: 300, tolerance: 50, lazy: false,
+			proxies: members
+		};
+	}
+
+	let daily_list = ['🇸🇬 新加坡自动', '🇯🇵 日本高级', '🇯🇵 日本自动', '🇭🇰 香港自动', '🇺🇸 美国自动', '🇨🇳 台湾自动'];
+	for (let n in claude_names) { if (n != 'REJECT') push(daily_list, n); }
+	for (let n in sub_all) push(daily_list, n);
+
+	let groups = [
+		{ name: '🤖 Claude-AI', type: 'select', proxies: claude_names },
+		ut('🇸🇬 新加坡中转', sg_names),
+		{ name: '🚀 日常代理', type: 'select', proxies: daily_list },
+		{ name: '📹 油管视频', type: 'select', proxies: ['🇸🇬 新加坡自动', '🇭🇰 香港自动', '🇯🇵 日本高级', '🇺🇸 美国自动', '🇨🇳 台湾自动', '🚀 日常代理'] },
+		{ name: '🌏 Google', type: 'select', proxies: ['🇸🇬 新加坡自动', '🇺🇸 美国自动', '🇯🇵 日本高级', '🇭🇰 香港自动', '🚀 日常代理'] },
+		{ name: '🎥 奈飞视频', type: 'select', proxies: ['🇸🇬 新加坡自动', '🇺🇸 美国自动', '🇯🇵 日本高级', '🇭🇰 香港自动', '🇨🇳 台湾自动', '🚀 日常代理'] },
+		{ name: '🎬 Crunchyroll', type: 'select', proxies: ['🇺🇸 美国自动', '🇸🇬 新加坡自动', '🇯🇵 日本高级', '🚀 日常代理'] },
+		{ name: '🌸 樱花动漫', type: 'select', proxies: ['🇭🇰 香港自动', '🇨🇳 台湾自动', '🇸🇬 新加坡自动', '🚀 日常代理'] },
+		{ name: '🍊 Mikan', type: 'select', proxies: ['🇸🇬 新加坡自动', '🇭🇰 香港自动', '🇯🇵 日本自动', '🚀 日常代理'] },
+		ut('🇸🇬 新加坡自动', sg_names),
+		ut('🇯🇵 日本高级', jp_hi),
+		ut('🇯🇵 日本自动', jp_all),
+		ut('🇭🇰 香港自动', hk_names),
+		ut('🇺🇸 美国自动', us_names),
+		ut('🇨🇳 台湾自动', tw_names),
+	];
+
+	let rules = [
+		'GEOSITE,private,DIRECT',
+		'GEOIP,private,DIRECT,no-resolve',
+	];
+	// Custom rules placed at top priority (after private)
+	for (let r in (studio.custom_rules ?? [])) {
+		if (r.enabled === false) continue;
+		if (!r.type || !r.value || !r.target) continue;
+		let line = r.type + ',' + trim(r.value) + ',' + r.target;
+		if (r.type == 'IP-CIDR' || r.type == 'IP-CIDR6') line += ',no-resolve';
+		push(rules, line);
+	}
+	// Core built-in AI / Claude / Codex / Antigravity + Media + CN rules
+	let builtin = [
+		'DOMAIN-SUFFIX,anthropic.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,claude.ai,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,claude.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,claudeusercontent.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,clau.de,🤖 Claude-AI',
+		'IP-CIDR,160.79.104.0/23,🤖 Claude-AI,no-resolve',
+		'GEOSITE,anthropic,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,openai.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,chatgpt.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,oaistatic.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,oaiusercontent.com,🤖 Claude-AI',
+		'GEOSITE,openai,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,antigravity.google,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,cloudcode-pa.googleapis.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,daily-cloudcode-pa.googleapis.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,generativelanguage.googleapis.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,aiplatform.googleapis.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,aistudio.google.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,makersuite.google.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,gemini.google.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,deepmind.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,deepmind.google,🤖 Claude-AI',
+		'GEOSITE,google-gemini,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,x.ai,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,grok.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,perplexity.ai,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,cursor.sh,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,cursor.com,🤖 Claude-AI',
+		'DOMAIN-SUFFIX,poe.com,🤖 Claude-AI',
+		'GEOSITE,xai,🤖 Claude-AI',
+		'GEOSITE,category-ai-!cn,🤖 Claude-AI',
+		'GEOSITE,youtube,📹 油管视频',
+		'GEOSITE,google,🌏 Google',
+		'GEOIP,google,🌏 Google,no-resolve',
+		'GEOSITE,netflix,🎥 奈飞视频',
+		'GEOIP,netflix,🎥 奈飞视频,no-resolve',
+		'GEOSITE,cn,DIRECT',
+		'GEOIP,CN,DIRECT',
+		'MATCH,🚀 日常代理',
+	];
+	for (let b in builtin) push(rules, b);
+
+	let out = [
+		'mixed-port: 7890',
+		'tproxy-port: 7892',
+		'allow-lan: true',
+		"bind-address: '*'",
+		'mode: rule',
+		'log-level: warning',
+		'ipv6: false',
+		'unified-delay: true',
+		'tcp-concurrent: false',
+		'find-process-mode: off',
+		'external-controller: 0.0.0.0:9090',
+		'external-ui: ui',
+		'secret: ' + sprintf('%J', secret),
+		'profile:',
+		'  store-selected: true',
+		'  store-fake-ip: true',
+		'',
+		'sniffer:',
+		'  enable: true',
+		'  force-dns-mapping: true',
+		'  parse-pure-ip: true',
+		'  sniff:',
+		'    HTTP:',
+		'      ports: [80, 8080-8880]',
+		'      override-destination: true',
+		'    TLS:',
+		'      ports: [443, 8443]',
+		'    QUIC:',
+		'      ports: [443, 8443]',
+		'',
+		'dns:',
+		'  enable: true',
+		'  listen: 0.0.0.0:1053',
+		'  ipv6: false',
+		'  enhanced-mode: fake-ip',
+		'  fake-ip-range: 198.18.0.1/16',
+		'  fake-ip-filter:',
+		"    - '+.lan'",
+		"    - '+.local'",
+		"    - 'time.*.com'",
+		"    - 'ntp.*.com'",
+		"    - '+.msftconnecttest.com'",
+		"    - '+.msftncsi.com'",
+		"    - 'seetacloud.com'",
+		"    - '+.seetacloud.com'",
+		"    - 'autodl.com'",
+		"    - '+.autodl.com'",
+		'  default-nameserver:',
+		'    - 223.5.5.5',
+		'    - 223.6.6.6',
+		'  proxy-server-nameserver:',
+		'    - https://223.5.5.5/dns-query',
+		'    - https://223.6.6.6/dns-query',
+		'  direct-nameserver:',
+		'    - https://223.5.5.5/dns-query',
+		'    - https://223.6.6.6/dns-query',
+		'  nameserver:',
+		"    - 'https://1.1.1.1/dns-query#🚀 日常代理'",
+		"    - 'https://8.8.8.8/dns-query#🚀 日常代理'",
+		'  nameserver-policy:',
+		"    'geosite:cn,private':",
+		'      - https://223.5.5.5/dns-query',
+		'      - https://223.6.6.6/dns-query',
+		"    'geosite:anthropic,openai,google-gemini,xai,category-ai-!cn':",
+		"      - 'https://1.1.1.1/dns-query#🤖 Claude-AI'",
+		"      - 'https://8.8.8.8/dns-query#🤖 Claude-AI'",
+		'',
+		'proxies:',
+	];
+	for (let p in all_proxies) push(out, '  - ' + sprintf('%J', p));
+	push(out, '', 'proxy-groups:');
+	for (let g in groups) push(out, '  - ' + sprintf('%J', g));
+	push(out, '', 'rules:');
+	for (let r in rules) push(out, '  - ' + sprintf('%J', r));
+
+	fs.writefile(PROFILE_TMP, join('\n', out) + '\n');
+
+	// Validate strictly with mihomo -t before replacing live config
+	let chk = run_cmd('mihomo -d /etc/nikki/run -t -f ' + sh_quote(PROFILE_TMP));
+	if (chk.code != 0) {
+		fs.unlink(PROFILE_TMP);
+		return { ok: false, error: 'Mihomo 配置校验失败，未应用更改：\n' + chk.out };
+	}
+
+	// Backup old profile & atomic replace
+	if (fs.stat(PROFILE_PATH)) {
+		run_cmd('cp ' + sh_quote(PROFILE_PATH) + ' ' + sh_quote(PROFILE_PATH + '.bak'));
+	}
+	fs.rename(PROFILE_TMP, PROFILE_PATH);
+	fs.chmod(PROFILE_PATH, 0600);
+	save_studio(studio);
+
+	// Reload Nikki cleanly
+	let rel = run_cmd('/etc/init.d/nikki restart');
+	return { ok: rel.code == 0, proxy_count: length(all_proxies), reload_out: trim(rel.out) };
+}
+
+function fetch_subscription(sub) {
+	fs.mkdir(SUBS_DIR, 0700);
+	let raw_file = '/tmp/sub_fetch_' + sub.id + '.raw';
+	let proxy_flag = sub.use_proxy ? '-x http://127.0.0.1:7890' : '';
+	let cmd = 'curl -sSL -m 25 ' + proxy_flag + ' -A "ClashMeta" -w "\\n__HTTP_CODE__%{http_code}" ' + sh_quote(sub.url) + ' -o ' + sh_quote(raw_file);
+	let r = run_cmd(cmd);
+	let m = match(r.out, /__HTTP_CODE__(\d+)/);
+	let code = m ? int(m[1]) : 0;
+	if (r.code != 0 || code < 200 || code >= 300) {
+		fs.unlink(raw_file);
+		return { ok: false, error: '拉取订阅失败 (HTTP ' + code + '): ' + trim(r.out) };
+	}
+	// Parse Clash YAML proxies via yq -> JSON
+	let yq_r = run_cmd('yq -o=json ".proxies // []" ' + sh_quote(raw_file));
+	let parsed = null;
+	if (yq_r.code == 0) {
+		try {
+			let j = json(yq_r.out);
+			if (type(j) == 'array' && length(j) > 0) parsed = j;
+		} catch (e) {}
+	}
+	// Fallback: Base64 list of vless:// / ss:// URIs
+	if (!parsed) {
+		let txt = fs.readfile(raw_file) ?? '';
+		let dec = b64dec(replace(txt, /\s+/g, '')) ?? txt;
+		let nodes = [];
+		for (let ln in split(dec, /\r?\n/)) {
+			ln = trim(ln);
+			if (index(ln, 'vless://') == 0) {
+				let n = parse_vless_uri(ln, null);
+				if (n) push(nodes, n);
+			} else if (index(ln, 'ss://') == 0) {
+				let n = parse_ss_uri(ln, null);
+				if (n) push(nodes, n);
+			}
+		}
+		if (length(nodes) > 0) parsed = nodes;
+	}
+	fs.unlink(raw_file);
+	if (!parsed || length(parsed) == 0) {
+		return { ok: false, error: '订阅内容未解析出有效 Clash/VLESS/SS 节点（请确认链接返回 Clash 格式）' };
+	}
+	let cpath = SUBS_DIR + '/' + sub.id + '.json';
+	fs.writefile(cpath + '.tmp', sprintf('%J\n', parsed));
+	fs.rename(cpath + '.tmp', cpath);
+	sub.node_count = length(parsed);
+	let dt = run_cmd('date "+%Y-%m-%d %H:%M"');
+	sub.updated_at = trim(dt.out);
+	return { ok: true, count: length(parsed) };
+}
+
+// --- Main CGI Handler ---
+let q = parse_query(getenv('QUERY_STRING'));
+let action = q.action || 'state';
+let expected = get_secret();
+if (!expected) {
+	send_json({ ok: false, error: 'nikki.mixin.api_secret 未配置' }, 500);
+}
+let auth_hdr = getenv('HTTP_AUTHORIZATION') || '';
+let bearer = match(auth_hdr, /^Bearer\s+(.+)$/i);
+let token = (bearer ? trim(bearer[1]) : '') || getenv('HTTP_X_PROXY_TOKEN') || q.token || '';
+
+if (action == 'auth_check') {
+	send_json({ ok: token == expected });
+}
+if (token != expected) {
+	send_json({ ok: false, auth_error: true, error: '密钥错误，请重新输入管理密码' }, 401);
+}
+
+if (action == 'state') {
+	let studio = load_studio();
+	let temp_raw = trim(fs.readfile('/sys/class/thermal/thermal_zone0/temp') ?? '0');
+	let temp_c = int(temp_raw) / 1000.0;
+	let mem = run_cmd('free -m | awk "/Mem:/ {print \\$2,\\$3,\\$7}"');
+	let mp = split(trim(mem.out), /\s+/);
+	let pid = trim(run_cmd('pidof mihomo').out);
+	let ks = run_cmd('nft list chain inet fw4 forward_lan 2>/dev/null');
+	let killswitch = index(ks.out, 'accept_to_wan') < 0 && length(ks.out) > 0;
+
+	let live_proxies = {};
+	if (length(pid) > 0) {
+		let pr = mihomo_req('GET', '/proxies', null);
+		if (pr.code == 0) {
+			try {
+				let pj = json(pr.out);
+				live_proxies = pj.proxies ?? {};
+			} catch (e) {}
+		}
+	}
+	send_json({
+		ok: true,
+		system: {
+			temp_c: temp_c,
+			mem_total_kb: int(mp[0] ?? 0),
+			mem_used_kb: int(mp[1] ?? 0),
+			mem_avail_kb: int(mp[2] ?? 0),
+			mihomo_running: length(pid) > 0,
+			killswitch_active: killswitch,
+		},
+		studio: studio,
+		live_proxies: live_proxies,
+	});
+}
+
+if (action == 'switch') {
+	let body = read_body_json();
+	let r = mihomo_req('PUT', '/proxies/' + url_encode(body.group || ''), { name: body.name || '' });
+	send_json({ ok: r.code == 0 && length(trim(r.out)) == 0, out: r.out });
+}
+
+if (action == 'test_delay') {
+	let body = read_body_json();
+	let enc = url_encode(body.name || '');
+	let path = body.is_group
+		? ('/group/' + enc + '/delay?timeout=6000&url=https://www.gstatic.com/generate_204')
+		: ('/proxies/' + enc + '/delay?timeout=6000&url=https://www.gstatic.com/generate_204');
+	let r = mihomo_req('GET', path, null);
+	let parsed = null;
+	try { parsed = json(r.out); } catch (e) { parsed = { message: r.out }; }
+	send_json({ ok: true, data: parsed });
+}
+
+if (action == 'sub_save') {
+	let body = read_body_json();
+	let studio = load_studio();
+	if (body.delete_id) {
+		studio.subscriptions = filter(studio.subscriptions, (x) => x.id != body.delete_id);
+		fs.unlink(SUBS_DIR + '/' + body.delete_id + '.json');
+		let res = build_and_apply(studio);
+		send_json(res);
+	}
+	let sub = null;
+	for (let s in studio.subscriptions) {
+		if (s.id == body.id) { sub = s; break; }
+	}
+	let is_new = !sub;
+	if (is_new) {
+		sub = {
+			id: 'sub_' + time(),
+			name: trim(body.name || '新机场订阅'),
+			url: trim(body.url || ''),
+			enabled: true,
+			use_proxy: !!body.use_proxy,
+			node_count: 0,
+			updated_at: '',
+		};
+		push(studio.subscriptions, sub);
+	} else {
+		if (body.name != null) sub.name = trim(body.name);
+		if (body.url != null) sub.url = trim(body.url);
+		if (body.enabled != null) sub.enabled = !!body.enabled;
+		if (body.use_proxy != null) sub.use_proxy = !!body.use_proxy;
+	}
+	if (body.fetch_now && length(sub.url) > 0) {
+		let fr = fetch_subscription(sub);
+		if (!fr.ok) send_json(fr);
+	}
+	let res = build_and_apply(studio);
+	res.sub = sub;
+	send_json(res);
+}
+
+if (action == 'sub_refresh') {
+	let body = read_body_json();
+	let studio = load_studio();
+	let target = null;
+	for (let s in studio.subscriptions) {
+		if (s.id == body.id) { target = s; break; }
+	}
+	if (!target) send_json({ ok: false, error: '找不到该订阅' }, 404);
+	if (!target.url || length(target.url) == 0) send_json({ ok: false, error: '该条是本地导入缓存，没有可刷新的 URL' }, 400);
+	let fr = fetch_subscription(target);
+	if (!fr.ok) send_json(fr);
+	let res = build_and_apply(studio);
+	res.fetched = fr.count;
+	send_json(res);
+}
+
+if (action == 'node_save') {
+	let body = read_body_json();
+	let studio = load_studio();
+	if (body.delete_id) {
+		studio.custom_nodes = filter(studio.custom_nodes, (x) => x.id != body.delete_id);
+		send_json(build_and_apply(studio));
+	}
+	let cfg = body.config;
+	if (!cfg && body.uri) {
+		let u = trim(body.uri);
+		if (index(u, 'vless://') == 0) cfg = parse_vless_uri(u, body.name);
+		else if (index(u, 'ss://') == 0) cfg = parse_ss_uri(u, body.name);
+		else {
+			try { cfg = json(u); } catch (e) {}
+		}
+	}
+	if (!cfg || type(cfg) != 'object' || !cfg.name || !cfg.type) {
+		send_json({ ok: false, error: '无法解析节点，请粘贴标准 vless:// 或 ss:// 链接（或合法 JSON 对象）' }, 400);
+	}
+	let item = null;
+	for (let n in studio.custom_nodes) {
+		if (n.id == body.id) { item = n; break; }
+	}
+	if (!item) {
+		item = {
+			id: 'node_' + time(),
+			enabled: true,
+			dialer_proxy: body.dialer_proxy ?? '',
+			claude_exit: !!body.claude_exit,
+			config: cfg,
+		};
+		push(studio.custom_nodes, item);
+	} else {
+		if (body.enabled != null) item.enabled = !!body.enabled;
+		if (body.dialer_proxy != null) item.dialer_proxy = body.dialer_proxy;
+		if (body.claude_exit != null) item.claude_exit = !!body.claude_exit;
+		if (cfg) item.config = cfg;
+	}
+	send_json(build_and_apply(studio));
+}
+
+if (action == 'rule_save') {
+	let body = read_body_json();
+	let studio = load_studio();
+	if (body.delete_id) {
+		studio.custom_rules = filter(studio.custom_rules, (x) => x.id != body.delete_id);
+		send_json(build_and_apply(studio));
+	}
+	let item = null;
+	for (let r in studio.custom_rules) {
+		if (r.id == body.id) { item = r; break; }
+	}
+	if (!item) {
+		let rtype = body.type || 'DOMAIN-SUFFIX';
+		let rval = trim(body.value || '');
+		let gm = match(rval, /^(geosite|geoip):(.+)$/i);
+		if (gm) {
+			rtype = uc(gm[1]);
+			rval = trim(gm[2]);
+		}
+		item = {
+			id: 'rule_' + time(),
+			type: rtype,
+			value: rval,
+			target: body.target || '🤖 Claude-AI',
+			note: trim(body.note || ''),
+			enabled: true,
+		};
+		if (length(item.value) == 0) send_json({ ok: false, error: '匹配值不能为空' }, 400);
+		unshift(studio.custom_rules, item);
+	} else {
+		if (body.enabled != null) item.enabled = !!body.enabled;
+		if (body.type != null) item.type = body.type;
+		if (body.value != null) item.value = trim(body.value);
+		if (body.target != null) item.target = body.target;
+		if (body.note != null) item.note = trim(body.note);
+	}
+	send_json(build_and_apply(studio));
+}
+
+if (action == 'nikki_ctrl') {
+	let body = read_body_json();
+	let cmd = body.cmd || 'restart';
+	if (cmd != 'restart' && cmd != 'reload' && cmd != 'stop' && cmd != 'start') {
+		send_json({ ok: false, error: 'Invalid cmd' }, 400);
+	}
+	let r = run_cmd('/etc/init.d/nikki ' + cmd);
+	send_json({ ok: r.code == 0, out: trim(r.out) });
+}
+
+send_json({ ok: false, error: 'Unknown action: ' + action }, 400);

@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TR3600 Proxy Studio</title>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --card2: #1c222b; --border: #2a313c;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950;
+    --amber: #d29922; --red: #f85149; --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 18px 16px 48px; }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 18px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .badge {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    background: var(--card); border: 1px solid var(--border); color: var(--muted);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.err { background: var(--red); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button, .btn {
+    background: var(--card2); color: var(--text); border: 1px solid var(--border);
+    padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: 13px;
+    text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover, .btn:hover { background: #242c37; border-color: #3d4756; }
+  button.primary { background: #1f6feb; border-color: #388bfd; color: #fff; font-weight: 500; }
+  button.primary:hover { background: #388bfd; }
+  button.danger { color: var(--red); border-color: rgba(248,81,73,.35); }
+  button.danger:hover { background: rgba(248,81,73,.12); }
+  button.sm { padding: 4px 9px; font-size: 12px; border-radius: 6px; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .tabs {
+    display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border); padding-bottom: 10px;
+  }
+  .tab {
+    background: transparent; border: 1px solid transparent; color: var(--muted);
+    padding: 7px 14px; border-radius: 8px; font-weight: 500;
+  }
+  .tab.active { background: var(--card); border-color: var(--border); color: var(--text); }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 14px;
+  }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .card-title { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  .grid-nodes {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px;
+  }
+  .node-btn {
+    text-align: left; justify-content: space-between; padding: 9px 11px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+    width: 100%; overflow: hidden;
+  }
+  .node-btn.selected {
+    border-color: var(--accent); background: rgba(88,166,255,.1);
+  }
+  .node-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 155px; }
+  .delay { font-size: 11px; font-family: ui-monospace, monospace; flex-shrink: 0; }
+  .delay.fast { color: var(--green); }
+  .delay.mid { color: var(--amber); }
+  .delay.slow { color: var(--red); }
+
+  .form-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; }
+  input, select, textarea {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .grow { flex: 1; min-width: 180px; }
+  textarea { width: 100%; min-height: 70px; font-family: ui-monospace, monospace; font-size: 12px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px;
+    background: var(--card2); border: 1px solid var(--border);
+  }
+  .pill.ai { color: var(--purple); border-color: rgba(188,140,255,.4); background: rgba(188,140,255,.08); }
+  .pill.direct { color: var(--green); border-color: rgba(63,185,80,.4); background: rgba(63,185,80,.08); }
+  .chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.08); }
+  .chip small { color: var(--muted); font-family: inherit; margin-left: 4px; }
+  details.builtin-box { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+  details.builtin-box summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  details.builtin-box ul { margin: 8px 0 0 18px; padding: 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
+
+  #toast {
+    position: fixed; right: 18px; bottom: 18px; max-width: 420px; z-index: 99;
+    background: var(--card2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 11px 15px; box-shadow: 0 10px 30px rgba(0,0,0,.5); display: none;
+    white-space: pre-wrap; font-size: 13px;
+  }
+  #toast.err { border-color: var(--red); color: #ffb4ae; }
+  #toast.ok { border-color: var(--green); color: #b7f5c4; }
+
+  #loginMask {
+    position: fixed; inset: 0; background: rgba(13,17,23,.94); z-index: 50;
+    display: none; align-items: center; justify-content: center; padding: 16px;
+  }
+  .login-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px; width: 100%; max-width: 360px;
+  }
+  .login-box h2 { margin: 0 0 8px; font-size: 17px; }
+  label.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="loginMask">
+  <div class="login-box">
+    <h2>TR3600 Proxy Studio</h2>
+    <p class="muted" style="margin-top:0">请输入路由器管理密码（与 Nikki API 密钥一致）</p>
+    <div class="form-row">
+      <input id="loginToken" type="password" class="grow" placeholder="管理密码" onkeydown="if(event.key==='Enter')doLogin()">
+      <button class="primary" onclick="doLogin()">进入</button>
+    </div>
+    <div id="loginErr" style="color:var(--red);font-size:12px;margin-top:6px"></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>TR3600 Proxy Studio</h1>
+      <div class="badges" id="sysBadges">
+        <span class="badge">加载中...</span>
+      </div>
+    </div>
+    <div class="actions">
+      <a class="btn" id="zashLink" href="#" target="_blank">Zashboard 实时连接 ↗</a>
+      <button onclick="nikkiCtrl('restart')">重启 Mihomo</button>
+      <button onclick="loadState()">刷新</button>
+      <button class="sm" onclick="logout()">锁定</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="switch" onclick="switchTab('switch')">1. 节点切换</button>
+    <button class="tab" data-tab="subs" onclick="switchTab('subs')">2. 机场订阅</button>
+    <button class="tab" data-tab="nodes" onclick="switchTab('nodes')">3. 自建出口 / 链式代理</button>
+    <button class="tab" data-tab="rules" onclick="switchTab('rules')">4. 分流规则</button>
+  </div>
+
+  <!-- TAB 1: Live Node Switcher -->
+  <section id="tab-switch" class="panel active"></section>
+
+  <!-- TAB 2: Subscriptions -->
+  <section id="tab-subs" class="panel">
+    <div class="card">
+      <div class="card-head"><span class="card-title">添加新机场订阅</span></div>
+      <div class="form-row">
+        <input id="subName" placeholder="备注名（如：新机场-IEPL）" style="width:200px">
+        <input id="subUrl" class="grow" placeholder="粘贴 Clash / Base64 订阅 URL（https://...）">
+      </div>
+      <div class="form-row">
+        <label class="chk"><input id="subUseProxy" type="checkbox"> 通过当前代理拉取订阅（国内打不开订阅地址时勾选）</label>
+        <span style="flex:1"></span>
+        <button class="primary" onclick="addSub()">拉取并保存生效</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">已有订阅源</span>
+        <span class="muted">自动按节点名归入 新加坡中转 / 日本 / 香港 / 美国 / 台湾 测速组</span>
+      </div>
+      <div id="subList"></div>
+    </div>
+  </section>
+
+  <!-- TAB 3: Custom Nodes & Chained Exits -->
+  <section id="tab-nodes" class="panel">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">添加自建出口 / 链式节点</span>
+        <span class="muted">支持粘贴 vless://（含 Reality）、ss:// 链接或 Mihomo JSON</span>
+      </div>
+      <div class="form-row">
+        <input id="nodeName" placeholder="节点名（留空自动取链接备注）" style="width:210px">
+        <select id="nodeDialer">
+          <option value="🇸🇬 新加坡中转">前置中转：🇸🇬 新加坡中转（推荐）</option>
+          <option value="">前置中转：无（直接连接）</option>
+          <option value="🇯🇵 日本高级">前置中转：🇯🇵 日本高级</option>
+          <option value="🇭🇰 香港自动">前置中转：🇭🇰 香港自动</option>
+          <option value="🇺🇸 美国自动">前置中转：🇺🇸 美国自动</option>
+          <option value="🚀 日常代理">前置中转：🚀 日常代理</option>
+        </select>
+        <label class="chk"><input id="nodeClaude" type="checkbox" checked> 加入 🤖 Claude-AI 专用组</label>
+      </div>
+      <div class="form-row">
+        <textarea id="nodeUri" placeholder="粘贴 vless://... 或 ss://..."></textarea>
+      </div>
+      <div class="form-row" style="justify-content:flex-end">
+        <button class="primary" onclick="addNode()">解析并校验生效</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">已配置的自建出口</span></div>
+      <div id="nodeList"></div>
+    </div>
+  </section>
+
+  <!-- TAB 4: Custom Rules -->
+  <section id="tab-rules" class="panel">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">添加自定义分流规则</span>
+        <span class="muted">支持域名、IP 段及 Karing 同款内置 Rule Set（直接填 geosite:youtube 也能自动识别）</span>
+      </div>
+      <div class="form-row">
+        <select id="ruleType" onchange="onRuleTypeChange()">
+          <option value="GEOSITE">内置集合 (GEOSITE / Rule Set)</option>
+          <option value="GEOIP">内置 IP 集合 (GEOIP)</option>
+          <option value="DOMAIN-SUFFIX" selected>域名后缀 (DOMAIN-SUFFIX)</option>
+          <option value="DOMAIN">完整域名 (DOMAIN)</option>
+          <option value="DOMAIN-KEYWORD">域名关键词 (DOMAIN-KEYWORD)</option>
+          <option value="IP-CIDR">IP 段 (IP-CIDR)</option>
+        </select>
+        <input id="ruleVal" class="grow" placeholder="如：example.com、1.2.3.4/32 或 geosite:youtube">
+        <select id="ruleTarget">
+          <option value="🤖 Claude-AI">🤖 Claude-AI（锁定 Azure）</option>
+          <option value="DIRECT">DIRECT（国内直连）</option>
+          <option value="🚀 日常代理">🚀 日常代理</option>
+          <option value="📹 油管视频">📹 油管视频</option>
+          <option value="🌏 Google">🌏 Google</option>
+          <option value="🎥 奈飞视频">🎥 奈飞视频</option>
+          <option value="🎬 Crunchyroll">🎬 Crunchyroll</option>
+          <option value="🌸 樱花动漫">🌸 樱花动漫</option>
+          <option value="🍊 Mikan">🍊 Mikan</option>
+          <option value="🇸🇬 新加坡自动">🇸🇬 新加坡自动</option>
+          <option value="🇯🇵 日本高级">🇯🇵 日本高级</option>
+          <option value="🇭🇰 香港自动">🇭🇰 香港自动</option>
+          <option value="🇺🇸 美国自动">🇺🇸 美国自动</option>
+          <option value="REJECT">REJECT（拦截）</option>
+        </select>
+        <input id="ruleNote" placeholder="备注（可选）" style="width:140px">
+        <button class="primary" onclick="addRule()">添加并生效</button>
+      </div>
+      <div style="margin-top:10px">
+        <div class="muted">点选常用内置 Rule Set（等同 Karing 的 Rule Set built-in，点一下自动填入上方表单）：</div>
+        <div class="chip-wrap" id="builtinChips"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">我的自定义规则（最高优先级）</span>
+        <span class="muted">按从上到下顺序匹配，修改前自动 mihomo -t 校验</span>
+      </div>
+      <div id="ruleList"></div>
+      <details class="builtin-box">
+        <summary>查看系统已内置的默认分流规则（位于自定义规则之后，无需重复添加）</summary>
+        <ul>
+          <li><strong>🤖 Claude-AI（锁定 Azure-JapanEast）</strong>：Claude / Anthropic（含 IP 段）、OpenAI / ChatGPT、Antigravity / CloudCode、Gemini / AI Studio、xAI / Grok、Cursor、Perplexity、<code>geosite:category-ai-!cn</code></li>
+          <li><strong>📹 油管视频</strong>：<code>geosite:youtube</code></li>
+          <li><strong>🌏 Google</strong>：<code>geosite:google</code> + <code>geoip:google</code></li>
+          <li><strong>🎥 奈飞视频</strong>：<code>geosite:netflix</code> + <code>geoip:netflix</code></li>
+          <li><strong>DIRECT（国内直连）</strong>：<code>geosite:cn</code> + <code>geoip:cn</code> + 私有局域网</li>
+          <li><strong>🚀 日常代理（兜底 MATCH）</strong>：其余所有海外流量</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '/cgi-bin/proxy-api';
+let STATE = null;
+const SELECT_GROUPS = ['🤖 Claude-AI', '🚀 日常代理', '📹 油管视频', '🌏 Google', '🎥 奈飞视频', '🎬 Crunchyroll', '🌸 樱花动漫', '🍊 Mikan'];
+const AUTO_GROUPS = ['🇸🇬 新加坡中转', '🇸🇬 新加坡自动', '🇯🇵 日本高级', '🇯🇵 日本自动', '🇭🇰 香港自动', '🇺🇸 美国自动', '🇨🇳 台湾自动'];
+
+function getToken() { return localStorage.getItem('tr3600_proxy_token') || ''; }
+function toast(msg, kind='ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = kind; el.style.display = 'block';
+  clearTimeout(window._tt); window._tt = setTimeout(() => el.style.display = 'none', 4500);
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function apiCall(action, body=null) {
+  const tok = getToken();
+  const opts = { headers: { 'Authorization': 'Bearer ' + tok } };
+  if (body !== null) {
+    opts.method = 'POST';
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(`${API}?action=${encodeURIComponent(action)}&token=${encodeURIComponent(tok)}`, opts);
+  const j = await r.json();
+  if (r.status === 401 || j.auth_error) {
+    document.getElementById('loginMask').style.display = 'flex';
+    throw new Error(j.error || '未登录');
+  }
+  return j;
+}
+
+async function doLogin() {
+  const t = document.getElementById('loginToken').value.trim();
+  const r = await fetch(`${API}?action=auth_check&token=${encodeURIComponent(t)}`, { headers: { 'Authorization': 'Bearer ' + t } });
+  const j = await r.json();
+  if (j.ok) {
+    localStorage.setItem('tr3600_proxy_token', t);
+    document.getElementById('loginMask').style.display = 'none';
+    document.getElementById('loginErr').textContent = '';
+    loadState();
+  } else {
+    document.getElementById('loginErr').textContent = '密码不对，请重试';
+  }
+}
+function logout() {
+  localStorage.removeItem('tr3600_proxy_token');
+  document.getElementById('loginMask').style.display = 'flex';
+}
+
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
+}
+
+function fmtDelay(p) {
+  if (!p || !p.history || !p.history.length) return '';
+  const d = p.history[p.history.length - 1].delay;
+  if (!d) return '<span class="delay slow">超时</span>';
+  const cls = d < 150 ? 'fast' : (d < 350 ? 'mid' : 'slow');
+  return `<span class="delay ${cls}">${d}ms</span>`;
+}
+
+function renderAll() {
+  const s = STATE.system;
+  const usedMB = Math.round(s.mem_used_kb / 1024);
+  const totMB = Math.round(s.mem_total_kb / 1024);
+  const zHost = location.hostname;
+  document.getElementById('zashLink').href = `http://${zHost}:9090/ui/#/setup?hostname=${encodeURIComponent(zHost)}&port=9090&secret=${encodeURIComponent(getToken())}&http=1&label=TR3600`;
+  document.getElementById('sysBadges').innerHTML = `
+    <span class="badge"><span class="dot ${s.mihomo_running ? 'ok' : 'err'}"></span>Mihomo ${s.mihomo_running ? '运行中' : '已停止'}</span>
+    <span class="badge"><span class="dot ${s.killswitch_active ? 'ok' : 'err'}"></span>Kill Switch ${s.killswitch_active ? '已锁死' : '未启用'}</span>
+    <span class="badge">CPU ${s.temp_c.toFixed(1)}°C</span>
+    <span class="badge">内存 ${usedMB}/${totMB} MB</span>
+  `;
+
+  // Tab 1: Switcher
+  const lp = STATE.live_proxies || {};
+  let swHtml = '';
+  for (const gname of SELECT_GROUPS) {
+    const g = lp[gname];
+    if (!g || !g.all) continue;
+    const isAI = gname === '🤖 Claude-AI';
+    const items = g.all.slice(0, 48).map(n => {
+      const active = g.now === n ? 'selected' : '';
+      return `<button class="node-btn ${active}" onclick="selectNode(${esc(JSON.stringify(gname))}, ${esc(JSON.stringify(n))})">
+        <span class="node-name" title="${esc(n)}">${esc(n)}</span>
+        ${fmtDelay(lp[n])}
+      </button>`;
+    }).join('');
+    swHtml += `<div class="card">
+      <div class="card-head">
+        <span class="card-title">${esc(gname)} <span class="pill ${isAI ? 'ai' : ''}">当前：${esc(g.now)}</span></span>
+        <button class="sm" onclick="testSingle(${esc(JSON.stringify(g.now))})">测当前延迟</button>
+      </div>
+      <div class="grid-nodes">${items}</div>
+    </div>`;
+  }
+  const autoRows = AUTO_GROUPS.filter(n => lp[n]).map(n => `
+    <tr>
+      <td>${esc(n)}</td>
+      <td><span class="pill">${esc(lp[n].now || '-')}</span></td>
+      <td>${fmtDelay(lp[lp[n].now])}</td>
+      <td style="white-space:nowrap">
+        <button class="sm" onclick="testSingle(${esc(JSON.stringify(lp[n].now || n))})">测当前</button>
+        <button class="sm" onclick="testGroup(${esc(JSON.stringify(n))})">全组测速</button>
+      </td>
+    </tr>`).join('');
+  swHtml += `<div class="card">
+    <div class="card-head">
+      <span class="card-title">自动测速池（每 5 分钟自动测速）</span>
+      <span class="muted">Mihomo 自动挑选最低延迟节点，也可手动触发全组测速</span>
+    </div>
+    <table><thead><tr><th>分组</th><th>当前最优</th><th>延迟</th><th>操作</th></tr></thead><tbody>${autoRows}</tbody></table>
+  </div>`;
+  document.getElementById('tab-switch').innerHTML = swHtml;
+
+  // Tab 2: Subscriptions
+  const subs = STATE.studio.subscriptions || [];
+  if (!subs.length) {
+    document.getElementById('subList').innerHTML = '<div class="muted">暂无订阅</div>';
+  } else {
+    document.getElementById('subList').innerHTML = `<table>
+      <thead><tr><th>状态</th><th>名称</th><th>节点数</th><th>更新时间</th><th>操作</th></tr></thead>
+      <tbody>${subs.map(sub => `<tr>
+        <td><input type="checkbox" ${sub.enabled !== false ? 'checked' : ''} onchange="toggleSub('${esc(sub.id)}', this.checked)"></td>
+        <td><strong>${esc(sub.name)}</strong><div class="muted">${sub.url ? esc(sub.url.slice(0, 65) + (sub.url.length > 65 ? '...' : '')) : '本地迁移节点包'}</div></td>
+        <td>${sub.node_count || 0}</td>
+        <td class="muted">${esc(sub.updated_at || '-')}</td>
+        <td style="white-space:nowrap">
+          ${sub.url ? `<button class="sm" onclick="refreshSub('${esc(sub.id)}')">更新</button>` : ''}
+          <button class="sm danger" onclick="delSub('${esc(sub.id)}')">删除</button>
+        </td>
+      </tr>`).join('')}</tbody></table>`;
+  }
+
+  // Tab 3: Custom Nodes
+  const nodes = STATE.studio.custom_nodes || [];
+  document.getElementById('nodeList').innerHTML = !nodes.length ? '<div class="muted">暂无自建节点</div>' : `<table>
+    <thead><tr><th>启用</th><th>节点名</th><th>协议 / 地址</th><th>前置中转</th><th>Claude 专用</th><th>操作</th></tr></thead>
+    <tbody>${nodes.map(n => `<tr>
+      <td><input type="checkbox" ${n.enabled !== false ? 'checked' : ''} onchange="toggleNode('${esc(n.id)}', this.checked)"></td>
+      <td><strong>${esc(n.config.name)}</strong></td>
+      <td class="muted">${esc(n.config.type.toUpperCase())} · ${esc(n.config.server)}:${esc(n.config.port)}</td>
+      <td><span class="pill">${esc(n.dialer_proxy || '直连')}</span></td>
+      <td>${n.claude_exit ? '<span class="pill ai">🤖 Claude-AI</span>' : '<span class="muted">否</span>'}</td>
+      <td><button class="sm danger" onclick="delNode('${esc(n.id)}')">删除</button></td>
+    </tr>`).join('')}</tbody></table>`;
+
+  // Tab 4: Rules
+  const rules = STATE.studio.custom_rules || [];
+  document.getElementById('ruleList').innerHTML = !rules.length ? '<div class="muted">暂无自定义规则</div>' : `<table>
+    <thead><tr><th>类型</th><th>匹配值</th><th>目标分组</th><th>备注</th><th>操作</th></tr></thead>
+    <tbody>${rules.map(r => `<tr>
+      <td class="muted">${esc(r.type)}</td>
+      <td><code>${esc(r.value)}</code></td>
+      <td><span class="pill ${r.target==='🤖 Claude-AI'?'ai':(r.target==='DIRECT'?'direct':'')}">${esc(r.target)}</span></td>
+      <td class="muted">${esc(r.note || '')}</td>
+      <td><button class="sm danger" onclick="delRule('${esc(r.id)}')">删除</button></td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+async function loadState() {
+  try {
+    const j = await apiCall('state');
+    if (!j.ok) throw new Error(j.error);
+    STATE = j;
+    renderAll();
+  } catch (e) {
+    if (e.message !== '未登录') toast(e.message, 'err');
+  }
+}
+
+async function selectNode(group, name) {
+  const j = await apiCall('switch', { group, name });
+  if (j.ok) { toast(`已切换 ${group} → ${name}`); loadState(); }
+  else toast('切换失败：' + (j.out || ''), 'err');
+}
+
+async function testSingle(name) {
+  toast(`正在测速 ${name}...`);
+  const j = await apiCall('test_delay', { name, is_group: false });
+  if (j.data && j.data.delay) { toast(`${name}：${j.data.delay} ms`); loadState(); }
+  else toast(`${name} 测速失败：${(j.data && j.data.message) || '超时'}`, 'err');
+}
+async function testGroup(name) {
+  toast(`正在对 ${name} 全组测速...`);
+  const j = await apiCall('test_delay', { name, is_group: true });
+  const cnt = j.data && typeof j.data === 'object' ? Object.keys(j.data).length : 0;
+  if (cnt > 0) { toast(`${name} 全组测速完成（${cnt} 个节点响应）`); loadState(); }
+  else toast(`${name} 测速失败：${(j.data && j.data.message) || '超时'}`, 'err');
+}
+
+const BUILTIN_RULESETS = [
+  ['GEOSITE', 'github', 'GitHub', '🚀 日常代理'],
+  ['GEOSITE', 'telegram', 'Telegram', '🚀 日常代理'],
+  ['GEOIP', 'telegram', 'Telegram IP', '🚀 日常代理'],
+  ['GEOSITE', 'twitter', 'X / Twitter', '🚀 日常代理'],
+  ['GEOSITE', 'discord', 'Discord', '🚀 日常代理'],
+  ['GEOSITE', 'youtube', 'YouTube', '📹 油管视频'],
+  ['GEOSITE', 'netflix', 'Netflix', '🎥 奈飞视频'],
+  ['GEOSITE', 'disney', 'Disney+', '🚀 日常代理'],
+  ['GEOSITE', 'spotify', 'Spotify', '🚀 日常代理'],
+  ['GEOSITE', 'tiktok', 'TikTok', '🇯🇵 日本高级'],
+  ['GEOSITE', 'twitch', 'Twitch', '🚀 日常代理'],
+  ['GEOSITE', 'category-scholar-!cn', '海外学术', '🚀 日常代理'],
+  ['GEOSITE', 'steam', 'Steam', 'DIRECT'],
+  ['GEOSITE', 'bilibili', 'Bilibili', 'DIRECT'],
+  ['GEOSITE', 'apple', 'Apple', 'DIRECT'],
+  ['GEOSITE', 'microsoft', 'Microsoft', 'DIRECT'],
+  ['GEOSITE', 'category-ads-all', '广告拦截', 'REJECT'],
+  ['GEOSITE', 'geolocation-!cn', '全部海外站点', '🚀 日常代理'],
+];
+function renderBuiltinChips() {
+  const box = document.getElementById('builtinChips');
+  if (!box) return;
+  box.innerHTML = BUILTIN_RULESETS.map(([t, v, label, tgt]) => {
+    const tag = (t === 'GEOIP' ? 'geoip:' : 'geosite:') + v;
+    return `<button type="button" class="chip" onclick="pickRuleSet(${esc(JSON.stringify(t))}, ${esc(JSON.stringify(v))}, ${esc(JSON.stringify(label))}, ${esc(JSON.stringify(tgt))})">${esc(tag)}<small>${esc(label)}</small></button>`;
+  }).join('');
+}
+function pickRuleSet(type, val, label, target) {
+  document.getElementById('ruleType').value = type;
+  document.getElementById('ruleVal').value = val;
+  document.getElementById('ruleTarget').value = target;
+  document.getElementById('ruleNote').value = label;
+  onRuleTypeChange();
+  document.getElementById('ruleTarget').focus();
+}
+function onRuleTypeChange() {
+  const t = document.getElementById('ruleType').value;
+  const el = document.getElementById('ruleVal');
+  if (t === 'GEOSITE') el.placeholder = '内置网站集名称，如：github、telegram、bilibili、disney（无需写 geosite:）';
+  else if (t === 'GEOIP') el.placeholder = '内置 IP 集名称，如：telegram、cn、us、jp、hk（无需写 geoip:）';
+  else if (t === 'IP-CIDR') el.placeholder = '如：1.2.3.4/32 或 10.0.0.0/8';
+  else el.placeholder = '如：example.com（也可直接粘贴 geosite:youtube）';
+}
+renderBuiltinChips();
+
+async function addSub() {
+  const name = document.getElementById('subName').value.trim();
+  const url = document.getElementById('subUrl').value.trim();
+  const use_proxy = document.getElementById('subUseProxy').checked;
+  if (!url) return toast('请粘贴订阅 URL', 'err');
+  toast('正在拉取并校验配置...');
+  const j = await apiCall('sub_save', { name: name || '新机场订阅', url, use_proxy, fetch_now: true });
+  if (j.ok) {
+    document.getElementById('subName').value = '';
+    document.getElementById('subUrl').value = '';
+    toast(`订阅已保存并生效，共 ${j.proxy_count} 个节点`);
+    loadState();
+  } else toast(j.error || '保存失败', 'err');
+}
+async function toggleSub(id, enabled) {
+  const j = await apiCall('sub_save', { id, enabled });
+  if (j.ok) { toast('已更新并重载 Mihomo'); loadState(); } else toast(j.error, 'err');
+}
+async function refreshSub(id) {
+  toast('正在刷新订阅...');
+  const j = await apiCall('sub_refresh', { id });
+  if (j.ok) { toast(`刷新成功（${j.fetched} 节点），已重载`); loadState(); } else toast(j.error, 'err');
+}
+async function delSub(id) {
+  if (!confirm('确认删除该订阅源？')) return;
+  const j = await apiCall('sub_save', { delete_id: id });
+  if (j.ok) { toast('已删除并重载'); loadState(); } else toast(j.error, 'err');
+}
+
+async function addNode() {
+  const name = document.getElementById('nodeName').value.trim();
+  const uri = document.getElementById('nodeUri').value.trim();
+  const dialer_proxy = document.getElementById('nodeDialer').value;
+  const claude_exit = document.getElementById('nodeClaude').checked;
+  if (!uri) return toast('请粘贴节点链接', 'err');
+  toast('正在解析并校验...');
+  const j = await apiCall('node_save', { name, uri, dialer_proxy, claude_exit });
+  if (j.ok) {
+    document.getElementById('nodeName').value = '';
+    document.getElementById('nodeUri').value = '';
+    toast('节点已添加并重载 Mihomo');
+    loadState();
+  } else toast(j.error || '添加失败', 'err');
+}
+async function toggleNode(id, enabled) {
+  const j = await apiCall('node_save', { id, enabled });
+  if (j.ok) { toast('已更新并重载'); loadState(); } else toast(j.error, 'err');
+}
+async function delNode(id) {
+  if (!confirm('确认删除该自建节点？')) return;
+  const j = await apiCall('node_save', { delete_id: id });
+  if (j.ok) { toast('已删除并重载'); loadState(); } else toast(j.error, 'err');
+}
+
+async function addRule() {
+  const type = document.getElementById('ruleType').value;
+  const value = document.getElementById('ruleVal').value.trim();
+  const target = document.getElementById('ruleTarget').value;
+  const note = document.getElementById('ruleNote').value.trim();
+  if (!value) return toast('请填写域名或 IP', 'err');
+  const j = await apiCall('rule_save', { type, value, target, note });
+  if (j.ok) {
+    document.getElementById('ruleVal').value = '';
+    document.getElementById('ruleNote').value = '';
+    toast('规则已保存并生效');
+    loadState();
+  } else toast(j.error || '添加失败', 'err');
+}
+async function delRule(id) {
+  const j = await apiCall('rule_save', { delete_id: id });
+  if (j.ok) { toast('规则已删除并生效'); loadState(); } else toast(j.error, 'err');
+}
+
+async function nikkiCtrl(cmd) {
+  toast(`正在执行 nikki ${cmd}...`);
+  const j = await apiCall('nikki_ctrl', { cmd });
+  if (j.ok) { toast('操作完成'); setTimeout(loadState, 2500); } else toast(j.out || '失败', 'err');
+}
+
+if (!getToken()) {
+  document.getElementById('loginMask').style.display = 'flex';
+} else {
+  loadState();
+}
+</script>
+</body>
+</html>
