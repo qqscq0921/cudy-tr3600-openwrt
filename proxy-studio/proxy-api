@@ -6,7 +6,7 @@ import * as fs from 'fs';
 const STUDIO_PATH = '/etc/nikki/studio.json';
 const SUBS_DIR = '/etc/nikki/studio-subs';
 const PROFILE_PATH = '/etc/nikki/profiles/tr3600-main.yaml';
-const PROFILE_TMP = '/tmp/tr3600-main.validate.yaml';
+const PROFILE_TMP = '/etc/nikki/profiles/.tr3600-main.validate.yaml';
 const RULE_PROV_DIR = '/etc/nikki/run/providers/rule';
 const CLAUDE_SYNC_STATUS = '/etc/nikki/claude-sync-status.json';
 const MIHOMO_API = 'http://127.0.0.1:9090';
@@ -560,7 +560,9 @@ function build_and_apply(studio) {
 	if (fs.stat(PROFILE_PATH)) {
 		run_cmd('cp ' + sh_quote(PROFILE_PATH) + ' ' + sh_quote(PROFILE_PATH + '.bak'));
 	}
-	fs.rename(PROFILE_TMP, PROFILE_PATH);
+	if (!fs.rename(PROFILE_TMP, PROFILE_PATH)) {
+		return { ok: false, error: '原子替换配置文件失败: ' + (fs.error() ?? 'unknown') };
+	}
 	fs.chmod(PROFILE_PATH, 0600);
 	save_studio(studio);
 
