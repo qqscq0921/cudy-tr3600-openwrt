@@ -93,4 +93,4 @@ jobs:
           TAG="tr3600-25.12-$(date -u +%Y%m%d-%H%M)"
           gh release create "$TAG" release-files/* \
             --title "Cudy TR3600 v1 — OpenWrt 25.12 (${{ env.OPENWRT_REV }})" \
-            --notes "Built from official OpenWrt \`openwrt-25.12\` (\`${{ env.OPENWRT_REV }}\`) + auditable TR3600 v1 DTS/mt76/EEE patches + Nikki (mihomo-meta + Chinese LuCI). Default LAN IP: \`192.168.2.1\`."
+            --notes "Built from official OpenWrt \`openwrt-25.12\` (\`${{ env.OPENWRT_REV }}\`) + auditable TR3600 v1 DTS/mt76/EEE patches + Nikki (mihomo-meta + Chinese LuCI). Default LAN IP: \`192.168.10.1\`."

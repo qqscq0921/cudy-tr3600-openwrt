@@ -102,9 +102,9 @@ echo "[5/7] Installing audited mt76 stability patches..."
 mkdir -p package/kernel/mt76/patches
 cp -v "$REPO_ROOT/patches/mt76/"*.patch package/kernel/mt76/patches/
 
-echo "[6/7] Setting default LAN IP to 192.168.2.1..."
-sed -i 's/192\.168\.1\.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-grep -q '192.168.2.1' package/base-files/files/bin/config_generate
+echo "[6/7] Setting default LAN IP to 192.168.10.1..."
+sed -i 's/192\.168\.1\.1/192.168.10.1/g' package/base-files/files/bin/config_generate
+grep -q '192.168.10.1' package/base-files/files/bin/config_generate
 
 echo "[7/7] Copying rootfs overlay files/..."
 mkdir -p files
