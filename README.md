@@ -5,7 +5,7 @@
 ## 已包含的硬件修复
 
 1. **开发板支持（`PR #24596` + `PR #25860`）**：
-   - 512 MiB DDR4 内存、`fan_3p3v` GPIO6 稳压器，以及 PWM 通道 0 风扇控制。
+   - 512 MiB DDR4 内存、MT7987 内置 2.5G PHY 驱动、`fan_3p3v` GPIO6 稳压器，以及 PWM 通道 0 风扇控制。
    - 正确的红色（`GPIO46`）/ 白色（`GPIO48`）状态 LED 和 MAC 地址布局。
    - `SUPPORTED_DEVICES += R126`（兼容 Cudy 官方过渡固件）。
    - `MT7990E` 的 `wifi_devices.json` 条目及 `uboot-envtools`。

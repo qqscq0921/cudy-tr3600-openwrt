@@ -25,8 +25,8 @@ define Device/cudy_tr3600-v1
   DEVICE_VARIANT := v1
   DEVICE_DTS := mt7987b-cudy-tr3600-v1
   DEVICE_DTS_DIR := ../dts
-  DEVICE_PACKAGES := mt7987-2p5g-phy-firmware kmod-mt7990-firmware \\
-	kmod-hwmon-pwmfan kmod-usb3
+  DEVICE_PACKAGES := mt7987-2p5g-phy-firmware kmod-phy-mediatek-2p5g \\
+	kmod-mt7990-firmware kmod-hwmon-pwmfan kmod-usb3
   KERNEL = kernel-bin | lzma | \\
 	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb
   KERNEL_INITRAMFS = kernel-bin | lzma | \\
