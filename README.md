@@ -19,9 +19,11 @@
    - 默认 LAN IP 为 `192.168.10.1`，LuCI 使用中文界面，启用 `fq + BBR`；默认关闭硬件/软件流量分载，使 `nftables` 和透明代理能够检查 100% 的数据包。
 5. **预装代理图形界面**：
    - **Nikki**（`mihomo-meta` + `luci-app-nikki` + 中文界面 + Metacubexd/Yacd 面板）。
-6. **预装 Tailscale**：
+6. **风扇控制页面**：
+   - **智能风扇**（`luci-app-tr3600-fan`，支持自动温控和手动档位控制）。
+7. **预装 Tailscale**：
    - 包含 `tailscale` 服务及 `luci-app-tailscale-community` LuCI 管理页面。
-7. **USB 有线网卡支持**：
+8. **USB 有线网卡支持**：
    - 包含 Realtek RTL8152/8153/8156、ASIX AX88172 与 AX88179/178A、AQC111、Microchip LAN78xx、SMSC LAN75xx/95xx，以及 CDC Ethernet/NCM 和 RNDIS 驱动。
 
 ## 刷写步骤

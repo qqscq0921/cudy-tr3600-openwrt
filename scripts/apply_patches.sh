@@ -98,15 +98,21 @@ assert "0x7993" in p.read_text()
 print("  -> wifi_devices.json patched OK")
 PY
 
-echo "[5/7] Installing audited mt76 stability patches..."
+echo "[5/8] Installing vendored TR3600 fan control LuCI package..."
+mkdir -p package/luci-app-tr3600-fan
+cp -a "$REPO_ROOT/packages/luci-app-tr3600-fan/." package/luci-app-tr3600-fan/
+chmod +x package/luci-app-tr3600-fan/root/etc/init.d/tr3600-fan
+chmod +x package/luci-app-tr3600-fan/root/usr/sbin/tr3600-fan
+
+echo "[6/8] Installing audited mt76 stability patches..."
 mkdir -p package/kernel/mt76/patches
 cp -v "$REPO_ROOT/patches/mt76/"*.patch package/kernel/mt76/patches/
 
-echo "[6/7] Setting default LAN IP to 192.168.10.1..."
+echo "[7/8] Setting default LAN IP to 192.168.10.1..."
 sed -i 's/192\.168\.1\.1/192.168.10.1/g' package/base-files/files/bin/config_generate
 grep -q '192.168.10.1' package/base-files/files/bin/config_generate
 
-echo "[7/7] Copying rootfs overlay files/..."
+echo "[8/8] Copying rootfs overlay files/..."
 mkdir -p files
 cp -a "$REPO_ROOT/files/." files/
 chmod +x files/etc/uci-defaults/*
