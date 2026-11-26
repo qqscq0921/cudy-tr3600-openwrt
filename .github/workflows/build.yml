@@ -57,10 +57,12 @@ jobs:
           grep -q '^CONFIG_PACKAGE_nikki=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-nikki=y$' .config
           grep -q '^CONFIG_PACKAGE_mihomo-meta=y$' .config
+          grep -q '^CONFIG_PACKAGE_tailscale=y$' .config
+          grep -q '^CONFIG_PACKAGE_luci-app-tailscale-community=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-rtl8152=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-aqc111=y$' .config
-          echo "Verified target + Nikki + mihomo-meta + USB Ethernet drivers in .config"
+          echo "Verified target + Nikki + Tailscale + USB Ethernet drivers in .config"
 
       - name: Download sources
         working-directory: openwrt
