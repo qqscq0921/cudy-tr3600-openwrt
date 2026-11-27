@@ -46,6 +46,8 @@ jobs:
           git clone --depth 1 -b openwrt-25.12 https://github.com/openwrt/openwrt.git openwrt
           cd openwrt
           echo "OPENWRT_REV=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          # Each build signs packages with a freshly generated key, so every build needs its own feed path.
+          echo "FEED_ID=run${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       - name: Restore OpenWrt download cache
         uses: actions/cache@v4
@@ -87,7 +89,7 @@ jobs:
           make defconfig
           ARCH=$(sed -n 's/^CONFIG_ARCH_PACKAGES="\(.*\)"$/\1/p' .config)
           REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          REPO_BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}/apk/${OPENWRT_REV}/${{ matrix.variant }}"
+          REPO_BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}          /apk/${FEED_ID}/${{ matrix.variant }}"
           mkdir -p files/etc/apk/repositories.d
           {
             echo "${REPO_BASE}/targets/mediatek/filogic/packages/packages.adb"
@@ -161,7 +163,7 @@ jobs:
 
       - name: Organize matching extension package repository
         run: |
-          REPO_ROOT="package-repo/apk/${OPENWRT_REV}/${{ matrix.variant }}"
+          REPO_ROOT="package-repo/apk/${FEED_ID}/${{ matrix.variant }}"
           OUT=openwrt/bin/targets/mediatek/filogic
           mkdir -p "$REPO_ROOT/targets/mediatek/filogic"
           cp -a openwrt/bin/packages "$REPO_ROOT/packages"
@@ -205,24 +207,60 @@ jobs:
   pages:
     needs: build
     runs-on: ubuntu-24.04
+    concurrency:
+      group: github-pages-feeds
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      KEEP_FEEDS: 5
     steps:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Download extension package repositories
+      - name: Fetch previously published feeds from gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q site
+          cd site
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin gh-pages; then
+            git checkout -q FETCH_HEAD -- .
+          else
+            echo "No gh-pages branch yet; starting a fresh feed site."
+          fi
+
+      - name: Add this build's extension package repositories
         uses: actions/download-artifact@v4
         with:
           pattern: cudy-tr3600-v1-*-apk-*
-          path: package-repo
+          path: site
           merge-multiple: true
+
+      - name: Prune old feeds and store them on gh-pages
+        working-directory: site
+        run: |
+          mkdir -p apk
+          ls -1 apk | sort -V | head -n -"${KEEP_FEEDS}" | while read -r OLD; do
+            echo "Pruning apk/${OLD}"
+            rm -rf "apk/${OLD}"
+          done
+          touch .nojekyll
+          ls -1 apk
+          du -sh --exclude=.git .
+          git add -A
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898299+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Publish APK feeds for run ${GITHUB_RUN_NUMBER}"
+          # Single-commit branch keeps repository history from growing with binary packages.
+          git push -q -f origin HEAD:gh-pages
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: package-repo
+          path: site
 
       - name: Deploy extension package repository
         id: deployment
