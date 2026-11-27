@@ -95,24 +95,39 @@ jobs:
             done
             echo "src/gz tr3600_target ${REPO_BASE}/targets/mediatek/filogic/packages"
           } > files/etc/opkg/tr3600-extensionfeeds.conf
-          grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y$' .config
-          grep -q '^CONFIG_CCACHE=y$' .config
-          grep -q '^CONFIG_PACKAGE_luci-app-tr3600-fan=y$' .config
-          grep -q '^CONFIG_PACKAGE_kmod-usb-net-rtl8152=y$' .config
-          grep -q '^CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y$' .config
-          grep -q '^CONFIG_PACKAGE_kmod-usb-net-aqc111=y$' .config
-          grep -q '^CONFIG_PACKAGE_luci-app-openclash=m$' .config
+          FAILED=0
+          want() {
+            if ! grep -q "^$1\$" .config; then
+              echo "::error::Missing in .config: $1 (actual: $(grep -E "^(# )?${1%%=*}( |=)" .config || echo none))"
+              FAILED=1
+            fi
+          }
+          unwanted() {
+            if grep -q "^$1\$" .config; then
+              echo "::error::Unexpected in .config: $1"
+              FAILED=1
+            fi
+          }
+          want CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y
+          want CONFIG_CCACHE=y
+          want CONFIG_PACKAGE_luci-app-tr3600-fan=y
+          want CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
+          want CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y
+          want CONFIG_PACKAGE_kmod-usb-net-aqc111=y
+          want CONFIG_PACKAGE_luci-app-openclash=m
+          want CONFIG_PACKAGE_dnsmasq-full=y
           if [ "${{ matrix.variant }}" = "full" ]; then
-            grep -q '^CONFIG_PACKAGE_nikki=y$' .config
-            grep -q '^CONFIG_PACKAGE_luci-app-nikki=y$' .config
-            grep -q '^CONFIG_PACKAGE_mihomo-meta=y$' .config
-            grep -q '^CONFIG_PACKAGE_tailscale=y$' .config
-            grep -q '^CONFIG_PACKAGE_luci-app-tailscale-community=y$' .config
+            want CONFIG_PACKAGE_nikki=y
+            want CONFIG_PACKAGE_luci-app-nikki=y
+            want CONFIG_PACKAGE_mihomo-meta=y
+            want CONFIG_PACKAGE_tailscale=y
+            want CONFIG_PACKAGE_luci-app-tailscale-community=y
           else
-            ! grep -q '^CONFIG_PACKAGE_nikki=y$' .config
-            ! grep -q '^CONFIG_PACKAGE_mihomo-meta=y$' .config
-            ! grep -q '^CONFIG_PACKAGE_tailscale=y$' .config
+            unwanted CONFIG_PACKAGE_nikki=y
+            unwanted CONFIG_PACKAGE_mihomo-meta=y
+            unwanted CONFIG_PACKAGE_tailscale=y
           fi
+          [ "$FAILED" = 0 ]
           echo "Verified ${{ matrix.variant }} configuration"
 
       - name: Download sources
