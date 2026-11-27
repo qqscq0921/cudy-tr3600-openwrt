@@ -11,6 +11,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: standard
+            config: tr3600.config
+          - variant: full
+            config: tr3600-full.config
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,6 +43,7 @@ jobs:
           echo "OPENWRT_REV=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       - name: Add Nikki feed (mihomo-meta + LuCI GUI)
+        if: matrix.variant == 'full'
         run: |
           echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> openwrt/feeds.conf.default
 
@@ -51,19 +60,25 @@ jobs:
       - name: Generate and verify .config
         working-directory: openwrt
         run: |
-          cp ../config/tr3600.config .config
+          cp ../config/${{ matrix.config }} .config
           make defconfig
           grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y$' .config
-          grep -q '^CONFIG_PACKAGE_nikki=y$' .config
-          grep -q '^CONFIG_PACKAGE_luci-app-nikki=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-tr3600-fan=y$' .config
-          grep -q '^CONFIG_PACKAGE_mihomo-meta=y$' .config
-          grep -q '^CONFIG_PACKAGE_tailscale=y$' .config
-          grep -q '^CONFIG_PACKAGE_luci-app-tailscale-community=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-rtl8152=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-aqc111=y$' .config
-          echo "Verified target + Nikki + fan control + Tailscale + USB Ethernet drivers in .config"
+          if [ "${{ matrix.variant }}" = "full" ]; then
+            grep -q '^CONFIG_PACKAGE_nikki=y$' .config
+            grep -q '^CONFIG_PACKAGE_luci-app-nikki=y$' .config
+            grep -q '^CONFIG_PACKAGE_mihomo-meta=y$' .config
+            grep -q '^CONFIG_PACKAGE_tailscale=y$' .config
+            grep -q '^CONFIG_PACKAGE_luci-app-tailscale-community=y$' .config
+          else
+            ! grep -q '^CONFIG_PACKAGE_nikki=y$' .config
+            ! grep -q '^CONFIG_PACKAGE_mihomo-meta=y$' .config
+            ! grep -q '^CONFIG_PACKAGE_tailscale=y$' .config
+          fi
+          echo "Verified ${{ matrix.variant }} configuration"
 
       - name: Download sources
         working-directory: openwrt
@@ -80,17 +95,35 @@ jobs:
         run: |
           mkdir -p release-files
           OUT=openwrt/bin/targets/mediatek/filogic
-          cp "$OUT"/*cudy_tr3600-v1* release-files/
-          cp "$OUT"/*.manifest release-files/ || true
-          cp "$OUT"/sha256sums release-files/ || true
-          (cd release-files && sha256sum *.bin > SHA256SUMS.txt)
+          for FILE in "$OUT"/*cudy_tr3600-v1*.bin "$OUT"/*cudy_tr3600-v1*.manifest; do
+            [ -e "$FILE" ] || continue
+            NAME=$(basename "$FILE")
+            case "$NAME" in
+              *.bin) DEST="${NAME%.bin}-${{ matrix.variant }}.bin" ;;
+              *.manifest) DEST="${NAME%.manifest}-${{ matrix.variant }}.manifest" ;;
+            esac
+            cp "$FILE" "release-files/$DEST"
+          done
+          cp "$OUT"/sha256sums "release-files/sha256sums-${{ matrix.variant }}" || true
+          (cd release-files && sha256sum *.bin > "SHA256SUMS-${{ matrix.variant }}.txt")
           ls -lh release-files/
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cudy-tr3600-v1-openwrt-25.12-${{ env.OPENWRT_REV }}
+          name: cudy-tr3600-v1-${{ matrix.variant }}-openwrt-25.12-${{ env.OPENWRT_REV }}
           path: release-files/
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cudy-tr3600-v1-*-openwrt-25.12-*
+          path: release-files
+          merge-multiple: true
 
       - name: Publish GitHub Release
         env:
@@ -98,5 +131,5 @@ jobs:
         run: |
           TAG="tr3600-25.12-$(date -u +%Y%m%d-%H%M)"
           gh release create "$TAG" release-files/* \
-            --title "Cudy TR3600 v1 — OpenWrt 25.12 (${{ env.OPENWRT_REV }})" \
-            --notes "Built from official OpenWrt \`openwrt-25.12\` (\`${{ env.OPENWRT_REV }}\`) + auditable TR3600 v1 DTS/mt76/EEE patches + Nikki (mihomo-meta + Chinese LuCI). Default LAN IP: \`192.168.10.1\`."
+            --title "Cudy TR3600 v1 — OpenWrt 25.12（标准版 + 完整版）" \
+            --notes "标准版保留 LuCI、终端、风扇控制、USB 网卡驱动和诊断工具；完整版额外包含 Nikki、代理所需内核组件及 Tailscale。默认 LAN IP：\`192.168.10.1\`."

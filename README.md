@@ -17,17 +17,22 @@
 4. **散热和网络默认设置**：
    - 静音待机风扇曲线（`68 / 78 / 88 °C`，PWM `50% / 78% / 100%`，`5 °C` 回差）。
    - 默认 LAN IP 为 `192.168.10.1`，LuCI 使用中文界面，启用 `fq + BBR`；默认关闭硬件/软件流量分载，使 `nftables` 和透明代理能够检查 100% 的数据包。
-5. **预装代理图形界面**：
+5. **完整版预装代理图形界面**：
    - **Nikki**（`mihomo-meta` + `luci-app-nikki` + 中文界面 + Metacubexd/Yacd 面板）。
 6. **风扇控制页面**：
    - **智能风扇**（`luci-app-tr3600-fan`，支持自动温控和手动档位控制）。
-7. **预装 Tailscale**：
+7. **完整版预装 Tailscale**：
    - 包含 `tailscale` 服务及 `luci-app-tailscale-community` LuCI 管理页面。
 8. **USB 有线网卡支持**：
    - 包含 Realtek RTL8152/8153/8156、ASIX AX88172 与 AX88179/178A、AQC111、Microchip LAN78xx、SMSC LAN75xx/95xx，以及 CDC Ethernet/NCM 和 RNDIS 驱动。
 
+## 镜像版本
+
+- **标准版（`standard`）**：包含 TR3600 硬件支持、中文 LuCI、HTTPS、`ttyd` 终端、风扇控制、USB 有线网卡驱动，以及 `curl`、`htop`、`tcpdump`、`ethtool`、`lm-sensors` 等诊断工具；不包含 Nikki、代理内核组件和 Tailscale。
+- **完整版（`full`）**：包含标准版全部内容，额外加入 Nikki、`mihomo-meta`、透明代理所需内核组件、Tailscale 及其 LuCI 管理页面。
+
 ## 刷写步骤
 
 1. 从 Cudy 下载中心下载官方过渡固件（`Develop_files_for_TR3600.zip`），并在原厂管理界面（`192.168.10.1`）中刷入。
-2. 重启后，访问 `http://192.168.1.1`，依次打开“系统”→“备份 / 刷写固件”，从 Releases 上传 `*-cudy_tr3600-v1-squashfs-sysupgrade.bin`（**取消勾选“保留配置”**）。
+2. 重启后，访问 `http://192.168.1.1`，依次打开“系统”→“备份 / 刷写固件”，从 Releases 上传所需版本的 `*-cudy_tr3600-v1-squashfs-sysupgrade-standard.bin` 或 `*-cudy_tr3600-v1-squashfs-sysupgrade-full.bin`（**取消勾选“保留配置”**）。
 3. 再次重启后，访问 `http://192.168.10.1`（用户名为 `root`，初始密码为空；请立即设置密码）。
