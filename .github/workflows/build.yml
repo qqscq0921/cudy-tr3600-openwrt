@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -43,9 +45,9 @@ jobs:
           echo "OPENWRT_REV=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       - name: Add Nikki feed (mihomo-meta + LuCI GUI)
-        if: matrix.variant == 'full'
         run: |
           echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> openwrt/feeds.conf.default
+          echo "src-git openclash https://github.com/vernesong/OpenClash.git;master" >> openwrt/feeds.conf.default
 
       - name: Apply auditable Cudy TR3600 v1 patches & overlay
         run: |
@@ -62,11 +64,22 @@ jobs:
         run: |
           cp ../config/${{ matrix.config }} .config
           make defconfig
+          ARCH=$(sed -n 's/^CONFIG_ARCH_PACKAGES="\(.*\)"$/\1/p' .config)
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          REPO_BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}/ipk/${OPENWRT_REV}/${{ matrix.variant }}"
+          mkdir -p files/etc/opkg
+          {
+            for FEED in base luci packages nikki openclash; do
+              echo "src/gz tr3600_${FEED} ${REPO_BASE}/packages/${ARCH}/${FEED}"
+            done
+            echo "src/gz tr3600_target ${REPO_BASE}/targets/mediatek/filogic/packages"
+          } > files/etc/opkg/tr3600-extensionfeeds.conf
           grep -q '^CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-tr3600-fan=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-rtl8152=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y$' .config
           grep -q '^CONFIG_PACKAGE_kmod-usb-net-aqc111=y$' .config
+          grep -q '^CONFIG_PACKAGE_luci-app-openclash=m$' .config
           if [ "${{ matrix.variant }}" = "full" ]; then
             grep -q '^CONFIG_PACKAGE_nikki=y$' .config
             grep -q '^CONFIG_PACKAGE_luci-app-nikki=y$' .config
@@ -108,11 +121,26 @@ jobs:
           (cd release-files && sha256sum *.bin > "SHA256SUMS-${{ matrix.variant }}.txt")
           ls -lh release-files/
 
+      - name: Organize matching extension package repository
+        run: |
+          REPO_ROOT="package-repo/ipk/${OPENWRT_REV}/${{ matrix.variant }}"
+          OUT=openwrt/bin/targets/mediatek/filogic
+          mkdir -p "$REPO_ROOT/targets/mediatek/filogic"
+          cp -a openwrt/bin/packages "$REPO_ROOT/packages"
+          cp -a "$OUT/packages" "$REPO_ROOT/targets/mediatek/filogic/packages"
+          find "$REPO_ROOT" -name Packages.gz -o -name Packages.sig
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: cudy-tr3600-v1-${{ matrix.variant }}-openwrt-25.12-${{ env.OPENWRT_REV }}
           path: release-files/
+
+      - name: Upload extension package repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: cudy-tr3600-v1-${{ matrix.variant }}-ipk-${{ env.OPENWRT_REV }}
+          path: package-repo/
 
   release:
     needs: build
@@ -131,5 +159,32 @@ jobs:
         run: |
           TAG="tr3600-25.12-$(date -u +%Y%m%d-%H%M)"
           gh release create "$TAG" release-files/* \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Cudy TR3600 v1 — OpenWrt 25.12（标准版 + 完整版）" \
             --notes "标准版保留 LuCI、终端、风扇控制、USB 网卡驱动和诊断工具；完整版额外包含 Nikki、代理所需内核组件及 Tailscale。默认 LAN IP：\`192.168.10.1\`."
+
+  pages:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Download extension package repositories
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cudy-tr3600-v1-*-ipk-*
+          path: package-repo
+          merge-multiple: true
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: package-repo
+
+      - name: Deploy extension package repository
+        id: deployment
+        uses: actions/deploy-pages@v4

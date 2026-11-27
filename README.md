@@ -31,6 +31,8 @@
 - **标准版（`standard`）**：包含 TR3600 硬件支持、中文 LuCI、HTTPS、`ttyd` 终端、风扇控制、USB 有线网卡驱动，以及 `curl`、`htop`、`tcpdump`、`ethtool`、`lm-sensors` 等诊断工具；不包含 Nikki、代理内核组件和 Tailscale。
 - **完整版（`full`）**：包含标准版全部内容，额外加入 Nikki、`mihomo-meta`、透明代理所需内核组件、Tailscale 及其 LuCI 管理页面。
 
+标准版和完整版都会同时构建各自匹配的可选扩展 `.ipk` 软件源，但不会将这些可选扩展打入标准版镜像。该源包含 Nikki、OpenClash、Tailscale、WireGuard、SQM、USB 存储和文件系统、Samba、USB 蜂窝网络、客户端流量统计和限速、Wake-on-LAN、DDNS、Watchcat、UPnP 和 mwan3 等常用扩展。固件内已按本次 OpenWrt 提交和镜像版本配置专属源；运行 `opkg update` 后可按需安装。Nikki 和 OpenClash 均管理透明代理、DNS 与防火墙规则，应二选一安装和启用。
+
 ## 刷写步骤
 
 1. 从 Cudy 下载中心下载官方过渡固件（`Develop_files_for_TR3600.zip`），并在原厂管理界面（`192.168.10.1`）中刷入。
