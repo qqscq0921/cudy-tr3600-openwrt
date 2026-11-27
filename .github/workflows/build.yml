@@ -63,10 +63,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-25.12-${{ matrix.variant }}-ccache-
 
-      - name: Add Nikki feed (mihomo-meta + LuCI GUI)
+      - name: Add third-party proxy LuCI packages
         run: |
           echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> openwrt/feeds.conf.default
-          echo "src-git openclash https://github.com/vernesong/OpenClash.git;master" >> openwrt/feeds.conf.default
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/vernesong/OpenClash.git openclash
+          git -C openclash sparse-checkout set luci-app-openclash
+          cp -a openclash/luci-app-openclash openwrt/package/luci-app-openclash
 
       - name: Apply auditable Cudy TR3600 v1 patches & overlay
         run: |
@@ -88,7 +90,7 @@ jobs:
           REPO_BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}/ipk/${OPENWRT_REV}/${{ matrix.variant }}"
           mkdir -p files/etc/opkg
           {
-            for FEED in base luci packages nikki openclash; do
+            for FEED in base luci packages nikki; do
               echo "src/gz tr3600_${FEED} ${REPO_BASE}/packages/${ARCH}/${FEED}"
             done
             echo "src/gz tr3600_target ${REPO_BASE}/targets/mediatek/filogic/packages"
