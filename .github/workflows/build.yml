@@ -87,14 +87,14 @@ jobs:
           make defconfig
           ARCH=$(sed -n 's/^CONFIG_ARCH_PACKAGES="\(.*\)"$/\1/p' .config)
           REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          REPO_BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}/ipk/${OPENWRT_REV}/${{ matrix.variant }}"
-          mkdir -p files/etc/opkg
+          REPO_BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}/apk/${OPENWRT_REV}/${{ matrix.variant }}"
+          mkdir -p files/etc/apk/repositories.d
           {
+            echo "${REPO_BASE}/targets/mediatek/filogic/packages/packages.adb"
             for FEED in base luci packages nikki; do
-              echo "src/gz tr3600_${FEED} ${REPO_BASE}/packages/${ARCH}/${FEED}"
+              echo "${REPO_BASE}/packages/${ARCH}/${FEED}/packages.adb"
             done
-            echo "src/gz tr3600_target ${REPO_BASE}/targets/mediatek/filogic/packages"
-          } > files/etc/opkg/tr3600-extensionfeeds.conf
+          } > files/etc/apk/repositories.d/tr3600-extensionfeeds.list
           FAILED=0
           want() {
             if ! grep -q "^$1\$" .config; then
@@ -110,6 +110,7 @@ jobs:
           }
           want CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y
           want CONFIG_CCACHE=y
+          want CONFIG_USE_APK=y
           want CONFIG_PACKAGE_luci-app-tr3600-fan=y
           want CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
           want CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y
@@ -160,12 +161,13 @@ jobs:
 
       - name: Organize matching extension package repository
         run: |
-          REPO_ROOT="package-repo/ipk/${OPENWRT_REV}/${{ matrix.variant }}"
+          REPO_ROOT="package-repo/apk/${OPENWRT_REV}/${{ matrix.variant }}"
           OUT=openwrt/bin/targets/mediatek/filogic
           mkdir -p "$REPO_ROOT/targets/mediatek/filogic"
           cp -a openwrt/bin/packages "$REPO_ROOT/packages"
           cp -a "$OUT/packages" "$REPO_ROOT/targets/mediatek/filogic/packages"
-          find "$REPO_ROOT" -name Packages.gz -o -name Packages.sig
+          find "$REPO_ROOT" -name packages.adb | grep -q .
+          find "$REPO_ROOT" -name packages.adb
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -176,7 +178,7 @@ jobs:
       - name: Upload extension package repository
         uses: actions/upload-artifact@v4
         with:
-          name: cudy-tr3600-v1-${{ matrix.variant }}-ipk-${{ env.OPENWRT_REV }}
+          name: cudy-tr3600-v1-${{ matrix.variant }}-apk-${{ env.OPENWRT_REV }}
           path: package-repo/
 
   release:
@@ -213,7 +215,7 @@ jobs:
       - name: Download extension package repositories
         uses: actions/download-artifact@v4
         with:
-          pattern: cudy-tr3600-v1-*-ipk-*
+          pattern: cudy-tr3600-v1-*-apk-*
           path: package-repo
           merge-multiple: true
 
